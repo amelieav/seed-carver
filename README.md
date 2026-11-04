@@ -4,7 +4,9 @@
 
 Paint your ideal biome layout, and get matched with the seed closest to it.
 
-Biomes come from [cubiomes](https://github.com/Cubitect/cubiomes), using its newest model (1.21.4). The app searches a local bank of seeds, each stored as a surface biome map of the 1 km square around 0,0, with one 64×64 grid cell per chunk.
+**Seeds are for Minecraft Java Edition 1.21.4.** Older versions generate some of the same seeds differently (1.21.3 and earlier have no Pale Garden, and 1.17 and earlier use different world generation). Later versions and Bedrock are untested.
+
+Biomes come from [cubiomes](https://github.com/Cubitect/cubiomes), using its newest model (its "1.21 WD", the Winter Drop, released as 1.21.4). The app searches a local bank of seeds, each stored as a surface biome map of the 1 km square around 0,0, with one 64×64 grid cell per chunk.
 
 ## Download
 
