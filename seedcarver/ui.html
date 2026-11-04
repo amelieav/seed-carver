@@ -49,7 +49,11 @@
   #results button[aria-pressed=true] { border-color: var(--accent); background: #2b3a28; }
   #results b { display: block; font-variant-numeric: tabular-nums; }
   #results span { font-size: 12px; color: var(--dim); }
-  #summary { margin-top: 12px; min-height: 18px; }
+  #matchbar { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  #matchbar h2 { margin: 0; white-space: nowrap; }
+  #modes { flex: none; }
+  #modes button { padding: 3px 10px; white-space: nowrap; }
+  #summary { margin-top: 6px; min-height: 18px; }
   label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
 </style>
 </head>
@@ -105,6 +109,14 @@
         </div>
       </div>
     </div>
+    <div id="matchbar">
+      <h2>Match by</h2>
+      <div class="row seg" id="modes">
+        <button data-mode="area" aria-pressed="true">Area</button>
+        <button data-mode="brushes" aria-pressed="false">All brushes</button>
+      </div>
+      <div id="modeinfo" class="small"></div>
+    </div>
     <div id="summary" class="small" role="status"></div>
     <div id="results"></div>
   </main>
@@ -113,7 +125,7 @@
 <script>
 const $ = id => document.getElementById(id);
 let api, cfg, cells, cell, brush = 0, size = 4, painting = false, current = null, currentIds = null;
-let searching = false, searchAgain = false;
+let searching = false, searchAgain = false, allBrushes = false;
 
 window.addEventListener('pywebviewready', async () => {
   api = window.pywebview.api;
@@ -226,6 +238,18 @@ $('tools').addEventListener('click', e => {
   size = +e.target.dataset.size;
   [...$('tools').children].forEach(x => x.setAttribute('aria-pressed', x === e.target));
 });
+const MODE_INFO = {
+  area: 'Every painted cell counts equally.',
+  brushes: 'Every brush counts equally, and a seed must contain them all.',
+};
+$('modeinfo').textContent = MODE_INFO.area;
+$('modes').addEventListener('click', e => {
+  if (!e.target.dataset.mode) return;
+  allBrushes = e.target.dataset.mode === 'brushes';
+  [...$('modes').children].forEach(x => x.setAttribute('aria-pressed', x === e.target));
+  $('modeinfo').textContent = MODE_INFO[e.target.dataset.mode];
+  runSearch();
+});
 $('clear').onclick = () => { cells.fill(-1); drawGrid(); runSearch(); };
 $('showOverlay').onchange = drawOverlay;
 
@@ -235,9 +259,9 @@ async function runSearch() {
   if (!cells.some(g => g >= 0)) { $('results').textContent = ''; $('summary').textContent = ''; return; }
   searching = true;
   try {
-    const r = await api.search(cells);
+    const r = await api.search(cells, allBrushes);
     if (!r.hits.length) {
-      $('summary').textContent = 'The seed bank is empty. Build one in the sidebar first.';
+      $('summary').textContent = r.searched ? `None of ${r.searched.toLocaleString()} seeds contains every brush. Try Area, or build more seeds.` : 'The seed bank is empty. Build one in the sidebar first.';
       $('results').textContent = '';
     } else {
       $('summary').textContent = `Top ${r.hits.length} of ${r.searched.toLocaleString()} seeds, searched in ${r.seconds.toFixed(2)} s`;

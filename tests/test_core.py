@@ -71,6 +71,24 @@ class Bank(unittest.TestCase):
         self.assertEqual(len(hits), 5)
         self.assertEqual(hits, sorted(hits, key=lambda h: -h[1]))
 
+    def test_all_brushes_finds_a_small_brush_that_area_ignores(self):
+        forest = biomes.MEMBERS[biomes.NAMES.index("Forest")][0]
+        plains = biomes.MEMBERS[biomes.NAMES.index("Plains")][0]
+        cherry = biomes.MEMBERS[biomes.NAMES.index("Cherry")][0]
+        all_forest = bytearray([forest]) * core.CELLS
+        cherry_elsewhere = bytearray(all_forest)
+        cherry_elsewhere[0] = cherry
+        half_forest_cherry_in_place = bytearray([forest, plains]) * (core.CELLS // 2)
+        half_forest_cherry_in_place[100] = cherry
+        with open(self.path, "wb") as f:
+            f.write(bank.MAGIC + all_forest + cherry_elsewhere + half_forest_cherry_in_place)
+        drawing = [biomes.NAMES.index("Forest")] * core.CELLS
+        drawing[100] = biomes.NAMES.index("Cherry")
+
+        self.assertEqual([s for s, _ in bank.search(self.path, drawing, k=3)], [0, 1, 2])
+        ranked = bank.search(self.path, drawing, k=3, all_brushes=True)
+        self.assertEqual([s for s, _ in ranked], [2, 1])  # seed 0 has no cherry at all
+
     def test_search_rejects_empty_drawing(self):
         bank.build(self.path, 10)
         with self.assertRaises(ValueError):

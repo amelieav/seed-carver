@@ -37,9 +37,9 @@ class Api:
             return {"seeds": 0, "build": None, "error": str(e)}
         return {"seeds": seeds, "build": self._build, "error": self._error}
 
-    def search(self, drawing):
+    def search(self, drawing, all_brushes=False):
         start = time.perf_counter()
-        hits = bank.search(BANK, drawing)
+        hits = bank.search(BANK, drawing, all_brushes=all_brushes)
         return {
             "hits": [{"seed": s, "match": m} for s, m in hits],
             "seconds": time.perf_counter() - start,

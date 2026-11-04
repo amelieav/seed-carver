@@ -33,13 +33,13 @@ python build.py --exe               # standalone exe in dist/ (close the app fir
 
 ## Bank size
 
-Each seed takes 4,096 bytes. On an i5-12600K (16 threads), measured at 461 seeds/s while a second build was running, so expect faster on an idle PC:
+Each seed takes 4,096 bytes. On an i5-12600K (16 threads), about 1,000 seeds/s:
 
 | Seeds | Build | Disk | Search |
 |---|---|---|---|
-| 100k | 4 min | 0.4 GB | 0.2 s (estimate) |
-| 1M | 36 min | 4.1 GB | 0.6-1.7 s |
-| 10M | 6 h (estimate) | 41 GB | 6-17 s (estimate) |
+| 100k | 2 min | 0.4 GB | 0.2 s (estimate) |
+| 1M | 17 min | 4.1 GB | 0.6-1.7 s |
+| 10M | 2.8 h (estimate) | 41 GB | 6-17 s (estimate) |
 
 Best match by bank size:
 
@@ -72,6 +72,9 @@ World spawn is near 0,0 but not exactly on it, and may be some way off.
 
 **How is a match scored?**
 Each painted cell scores full for the same group, half for a similar group (forest and plains) or a river or beach, and nothing otherwise. Unpainted cells are ignored. The percentage is points earned out of points possible, and the top 10 seeds are shown.
+
+**What do the match modes do?**
+**Area** counts every painted cell equally, so a small brush barely affects the result. **All brushes** counts every brush equally however many cells it covers, and only shows seeds containing each brush somewhere in the area. Use it when a small patch, like cherry in a forest, must be present.
 
 **How well do painted rivers match?**
 Closely, but rarely exactly. On a 1M bank, top results for a painted line had a river within 16 blocks of 70-79% of its cells, against about 20% for random seeds.

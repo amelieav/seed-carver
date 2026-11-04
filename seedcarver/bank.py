@@ -3,6 +3,7 @@ import heapq
 import os
 import threading
 from array import array
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from . import biomes, core
@@ -52,8 +53,12 @@ def build(path, target, progress=None, stop=None, threads=THREADS):
     return done
 
 
-def search(path, drawing, k=10, threads=THREADS):
-    """Best k seeds for a drawing: CELLS group indexes, -1 = unpainted. Returns [(seed, match 0-1)]."""
+def search(path, drawing, k=10, threads=THREADS, all_brushes=False):
+    """Best k seeds for a drawing: CELLS group indexes, -1 = unpainted. Returns [(seed, match 0-1)].
+
+    By default every painted cell counts equally. With all_brushes every brush counts equally, however
+    many cells it covers, and a seed must contain each brush somewhere in the area.
+    """
     if len(drawing) != core.CELLS:
         raise ValueError(f"drawing must have {core.CELLS} cells")
     painted = [i for i, g in enumerate(drawing) if g >= 0]
@@ -63,6 +68,14 @@ def search(path, drawing, k=10, threads=THREADS):
     cells = array("H", painted)
     groups = array("H", (drawing[i] for i in painted))
     cost = b"".join(biomes.COST)
+    used = Counter(groups)
+    # 2**24 per brush keeps the total inside uint32: MISS * 2**24 * 15 brushes < 2**32
+    weights = array("I", (2**24 // used[g] if all_brushes else 1 for g in groups))
+    id_mask = array("I", [0]) * 256
+    for g in used:
+        for i in biomes.MEMBERS[g]:
+            id_mask[i] |= 1 << g
+    need = sum(1 << g for g in used) if all_brushes else 0
     local = threading.local()
     files = []
 
@@ -74,11 +87,11 @@ def search(path, drawing, k=10, threads=THREADS):
         n = min(SCAN_BLOCK, total - start)
         local.f.seek(HEADER + start * core.CELLS)
         local.f.readinto(local.buf)
-        return [(s, start + i) for s, i in core.scan(local.buf, n, cost, cells, groups, k)]
+        return [(s, start + i) for s, i in core.scan(local.buf, n, cost, cells, groups, weights, need, id_mask, k)]
 
     with ThreadPoolExecutor(threads) as pool:
         hits = heapq.nsmallest(k, (h for block in pool.map(scan, range(0, total, SCAN_BLOCK)) for h in block))
     for f in files:
         f.close()
-    worst = biomes.MISS * len(painted)
+    worst = biomes.MISS * sum(weights)
     return [(seed, 1 - score / worst) for score, seed in hits]

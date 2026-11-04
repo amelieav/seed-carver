@@ -13,7 +13,7 @@ _lib.sc_gen_block.argtypes = [C.c_uint64, C.c_int, C.c_void_p]
 _lib.sc_gen_block.restype = None
 _lib.sc_map.argtypes = [C.c_uint64, C.c_int, C.c_int, C.c_int, C.c_int, C.c_int, C.c_void_p]
 _lib.sc_map.restype = None
-_lib.sc_scan.argtypes = [C.c_void_p, C.c_int, C.c_char_p, C.c_void_p, C.c_void_p, C.c_int, C.c_int, C.c_void_p, C.c_void_p]
+_lib.sc_scan.argtypes = [C.c_void_p, C.c_int, C.c_char_p, C.c_void_p, C.c_void_p, C.c_void_p, C.c_int, C.c_uint32, C.c_void_p, C.c_int, C.c_void_p, C.c_void_p]
 _lib.sc_palette.argtypes = [C.c_void_p]
 _lib.sc_palette.restype = None
 _lib.sc_biome_name.argtypes = [C.c_int]
@@ -36,13 +36,16 @@ def biome_map(seed, x0, z0, step, w, h):
     return out
 
 
-def scan(buf, count, cost, cells, groups, k):
-    """Best k records of a block. cost: 256 bytes per group; cells, groups: array('H'). Returns [(score, index)]."""
+def scan(buf, count, cost, cells, groups, weights, need, id_mask, k):
+    """Best k records of a block. cost: 256 bytes per group; cells, groups: array('H'); weights: array('I').
+    Records must contain every bit of need, with id_mask giving each biome id's bit. Returns [(score, index)]."""
     index = (C.c_uint32 * k)()
     score = (C.c_uint32 * k)()
     cell_ptr = (C.c_uint16 * len(cells)).from_buffer(cells)
     group_ptr = (C.c_uint16 * len(groups)).from_buffer(groups)
-    n = _lib.sc_scan(_ptr(buf), count, cost, cell_ptr, group_ptr, len(cells), k, index, score)
+    weight_ptr = (C.c_uint32 * len(weights)).from_buffer(weights)
+    mask_ptr = (C.c_uint32 * len(id_mask)).from_buffer(id_mask)
+    n = _lib.sc_scan(_ptr(buf), count, cost, cell_ptr, group_ptr, weight_ptr, len(cells), need, mask_ptr, k, index, score)
     return [(score[i], index[i]) for i in range(n)]
 
 
