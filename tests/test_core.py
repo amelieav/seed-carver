@@ -81,6 +81,28 @@ class Bank(unittest.TestCase):
         with open(self.path, "rb") as a, open(fresh, "rb") as b:
             self.assertEqual(a.read(), b.read())
 
+    def test_records_round_trip(self):
+        bank.build(self.path, 700)
+        want = bytearray(700 * core.CELLS)
+        core.gen_block(0, 700, want)
+        self.assertEqual(bank.read(self.path, 0, 700), want)
+        self.assertEqual(bank.read(self.path, 250, 300), want[250 * core.CELLS:550 * core.CELLS])
+        self.assertLess(os.path.getsize(self.path), len(want) // 4)
+
+    def test_convert_previous_version(self):
+        raw = bytearray(600 * core.CELLS)
+        core.gen_block(0, 600, raw)
+        with open(self.path, "wb") as f:
+            f.write(bank.OLD_MAGIC + raw)
+        with self.assertRaises(ValueError):
+            bank.count(self.path)
+        self.assertEqual(bank.convert(self.path), 600)
+        self.assertEqual(bank.read(self.path, 0, 600), raw)
+        fresh = self.path + "2"
+        bank.build(fresh, 600)
+        with open(self.path, "rb") as a, open(fresh, "rb") as b:
+            self.assertEqual(a.read(), b.read())
+
     def test_rejects_foreign_file(self):
         with open(self.path, "wb") as f:
             f.write(b"not a bank at all")
@@ -109,7 +131,7 @@ class Bank(unittest.TestCase):
         half_forest_cherry_in_place = bytearray([forest, plains]) * (core.CELLS // 2)
         half_forest_cherry_in_place[100] = cherry
         with open(self.path, "wb") as f:
-            f.write(bank.MAGIC + all_forest + cherry_elsewhere + half_forest_cherry_in_place)
+            f.write(bank.MAGIC + bank.pack(all_forest + cherry_elsewhere + half_forest_cherry_in_place))
         drawing = [biomes.NAMES.index("Forest")] * core.CELLS
         drawing[100] = biomes.NAMES.index("Cherry")
 
@@ -121,10 +143,7 @@ class Bank(unittest.TestCase):
         import random
         bank.build(self.path, 3000)
         rng = random.Random(1)
-        buf = bytearray(3000 * core.CELLS)
-        with open(self.path, "rb") as f:
-            f.seek(bank.HEADER)
-            f.readinto(buf)
+        buf = bank.read(self.path, 0, 3000)
         cost = b"".join(biomes.COST)
         with open(self.path + ".idx", "rb") as f:
             f.seek(len(bank._index_header()))
@@ -148,7 +167,7 @@ class Bank(unittest.TestCase):
                 need = sum(1 << g for g in used) if all_brushes else 0
                 want = core.scan(buf, 3000, cost, cells, groups, weights, need, id_mask, 10)
                 exact = dict((i, sc) for sc, i in core.scan(buf, 3000, cost, cells, groups, weights, need, id_mask, 3000))
-                for level, b in zip(bank.LEVELS, level_bounds(tiles, 3000, cells, groups, weights, used, all_brushes)):
+                for level, b in enumerate(level_bounds(tiles, 3000, cells, groups, weights, used, all_brushes)):
                     self.assertEqual(set(b), set(exact), level)
                     self.assertTrue(all(b[i] <= exact[i] for i in exact), level)
                 worst = biomes.MISS * sum(weights)
@@ -177,27 +196,48 @@ class Bank(unittest.TestCase):
         self.assertEqual(bank.transform(drawing, 0, 2, 2)[0], drawing[16 * core.GRID + 16])
         self.assertEqual(bank.transform(drawing, 0, 2, 1)[0], drawing[16])
         self.assertEqual(bank.transform(drawing, 90, 2, 1), bank.transform(bank.transform(drawing, 0, 2, 1), 90))
+        diagonal = bank.transform(drawing, 45)
+        self.assertEqual(diagonal[0], -1)
+        self.assertEqual(diagonal[32 * core.GRID + 32], drawing[32 * core.GRID + 32])
 
     def test_fit_finds_a_turned_seed_and_matches_a_full_scan(self):
         bank.build(self.path, 1500)
-        buf = bytearray(1500 * core.CELLS)
-        with open(self.path, "rb") as f:
-            f.seek(bank.HEADER)
-            f.readinto(buf)
+        buf = bank.read(self.path, 0, 1500)
         to_group = {i: g for g, m in enumerate(biomes.MEMBERS) for i in m}
         seed = 321
         drawing = bank.transform([to_group.get(b, -1) for b in buf[seed * core.CELLS:(seed + 1) * core.CELLS]], 90)
         hits = bank.search_fit(self.path, drawing)
-        self.assertEqual(hits[0], (seed, 1.0, 270, 1, 1))
+        self.assertEqual(hits[0], (seed, 1.0, 270, 1, 1, 1))
         self.assertEqual(len({h[0] for h in hits}), 10)
+        small = {"ANGLES": (0, 45, 90), "ZOOMS": (1, 1.6), "STRETCHES": ((1, 1), (1.2, 1))}
+        saved = {name: getattr(bank, name) for name in small}
+        for name, value in small.items():
+            setattr(bank, name, value)
+        self.addCleanup(lambda: [setattr(bank, n, v) for n, v in saved.items()])
+        hits = bank.search_fit(self.path, drawing)
         want = {}
-        for sx in bank.SCALES:
-            for sy in bank.SCALES:
-                for degrees in bank.ROTATIONS:
-                    for s, m in bank.search(self.path, bank.transform(drawing, degrees, sx, sy), k=1500):
+        for zoom in bank.ZOOMS:
+            for kx, ky in bank.STRETCHES:
+                for degrees in bank.ANGLES:
+                    moved = bank.transform(drawing, degrees, kx / zoom, ky / zoom)
+                    if {g for g in moved if g >= 0} != {g for g in drawing if g >= 0}:
+                        continue
+                    for s, m in bank.search(self.path, moved, k=1500, all_brushes=True):
                         want[s] = max(want.get(s, 0), m)
         top = sorted(want.items(), key=lambda e: (-e[1], e[0]))[:10]
         self.assertEqual([(h[0], h[1]) for h in hits], top)
+
+    def test_fit_needs_every_brush(self):
+        forest = biomes.MEMBERS[biomes.NAMES.index("Forest")][0]
+        cherry = biomes.MEMBERS[biomes.NAMES.index("Cherry")][0]
+        all_forest = bytearray([forest]) * core.CELLS
+        cherry_far = bytearray(all_forest)
+        cherry_far[core.CELLS - 1] = cherry
+        with open(self.path, "wb") as f:
+            f.write(bank.MAGIC + bank.pack(all_forest + cherry_far))
+        drawing = [biomes.NAMES.index("Forest")] * core.CELLS
+        drawing[core.CELLS // 2 + core.GRID // 2] = biomes.NAMES.index("Cherry")
+        self.assertEqual([h[0] for h in bank.search_fit(self.path, drawing)], [1])
 
     def test_search_rejects_empty_drawing(self):
         bank.build(self.path, 10)

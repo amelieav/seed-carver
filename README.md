@@ -29,19 +29,21 @@ python -m unittest
 ```bash
 python -m seedcarver bench          # time 10k seeds on your PC
 python -m seedcarver build 1000000  # build or grow the bank; safe to interrupt
+python -m seedcarver convert        # shrink a bank from an older version to the compressed format, in place
 python -m seedcarver                # open the app
 python build.py --exe               # standalone exe in dist/ (close the app first)
 ```
 
 ## Bank size
 
-Each seed takes 4,096 bytes. On an i5-12600K (16 threads), about 1,000 seeds/s:
+Each seed takes about 600 bytes compressed in the bank, plus 832 bytes in its search index. On an i5-12600K (16 threads), about 1,000 seeds/s:
 
-| Seeds | Build | Disk | Search |
-|---|---|---|---|
-| 100k | 2 min | 0.4 GB | 0.2 s (estimate) |
-| 1M | 17 min | 4.1 GB | 0.6-1.7 s |
-| 10M | 2.8 h (estimate) | 41 GB | 6-17 s (estimate) |
+| Seeds | Build | Disk |
+|---|---|---|
+| 100k | 2 min | 0.15 GB |
+| 1M | 17 min | 1.4 GB |
+| 5M | 1.4 h (estimate) | 7 GB |
+| 10M | 2.8 h (estimate) | 14 GB |
 
 Best match by bank size:
 
@@ -56,10 +58,16 @@ Start with 1M. Rare biomes improve most with more seeds, and shapes the terrain 
 ## FAQ
 
 **Does building add to `seeds.bank`?**
-Yes. Build appends after the last complete seed, so growing 1M to 5M generates only the 4M new seeds. Stopping or crashing loses at most the unfinished record, and the next build resumes there.
+Yes. Build appends after the last complete block of seeds, so growing 1M to 5M generates only the 4M new seeds. Stopping or crashing loses at most the unfinished block of 256, and the next build resumes there.
+
+**I have a bank from before compression. Do I need to rebuild it?**
+No. Close the app and run `python -m seedcarver convert` (or `python -m seedcarver convert path/to/seeds.bank`). It rewrites the bank in place at about a seventh of the size, keeps every seed, and needs free space for the new copy (about 600 bytes per seed) while it runs. Until then the app shows a message asking you to convert. Builds always write the compressed format.
+
+**What format is the bank?**
+A 16-byte header, then blocks of up to 256 seeds in order from seed 0. Each block is a 2-byte seed count, each seed's 2-byte compressed length, then each seed's map compressed with zlib. A map is 4,096 cubiomes biome IDs, rows north to south, each west to east. Raw IDs are kept rather than groups, so groups and scoring can change without rebuilding.
 
 **What area does a match look at?**
-A fixed square, x and z from -512 to +512. It is split into 64×64 cells lined up with chunks, and each cell is one surface biome sample at its centre. Your drawing is only compared at that position, never shifted or rotated.
+A fixed square, x and z from -512 to +512. It is split into 64×64 cells lined up with chunks, and each cell is one surface biome sample at its centre. Area and All brushes compare your drawing only at that position. Best fit also turns and zooms it.
 
 World spawn is near 0,0 but not exactly on it, and may be some way off.
 
@@ -67,7 +75,7 @@ World spawn is near 0,0 but not exactly on it, and may be some way off.
 Each painted cell scores full for the same group, half for a similar group (forest and plains) or a river or beach, and nothing otherwise. Unpainted cells are ignored. The percentage is points earned out of points possible, and the top 10 seeds are shown.
 
 **What do the match modes do?**
-**Area** counts every painted cell equally, so a small brush barely affects the result. **All brushes** counts every brush equally however many cells it covers, and only shows seeds containing each brush somewhere in the area. Use it when a small patch, like cherry in a forest, must be present. **Best fit** scores like Area, but also tries the drawing turned by 90°, 180° and 270° and stretched to 0.8 or 1.25 of its width and height, each about the centre, and lists each seed at its best fit. Use it when the shape matters more than where it sits. The preview turns to line up with your drawing, and **Show drawing** lays your drawing over it stretched as it was matched.
+**Area** counts every painted cell equally, so a small brush barely affects the result. **All brushes** counts every brush equally however many cells it covers, and only shows seeds containing each brush somewhere in the area. Use it when a small patch, like cherry in a forest, must be present. **Best fit** is for when the shape matters most. It scores like All brushes, so small brushes still count and must be present, but tries the seed turned to any multiple of 15° and zoomed by 0.8×, 1×, 1.25×, 1.6× or 2× around 0,0, with the drawing stretched 1.2× wider or taller or not at all, and lists each seed at its best fit. A fit that pushes a brush out of the area is skipped. The preview turns and zooms to line up with your drawing, and **Show drawing** lays your drawing over it as stretched.
 
 **How well do painted rivers match?**
 Closely, but rarely exactly. On a 1M bank, top results for a painted line had a river within 16 blocks of 70-79% of its cells, against about 20% for random seeds.
@@ -76,13 +84,13 @@ Closely, but rarely exactly. On a 1M bank, top results for a painted line had a 
 Only for a file named exactly `seeds.bank`, directly beside the exe. Subfolders and other names are ignored.
 
 **What is `seeds.bank.idx`?**
-A search index built from the bank: for each seed, which biome groups appear in each 4×4-cell tile and which is commonest, plus an upper bound on each group's cells (800 bytes per seed, under a fifth of the bank). A search first works out every seed's best possible match from the index, coarse to fine (whole map, 16 regions, tiles), then reads and scores exactly only the seeds that could still make the top 10, so most of the bank is never read. Results are identical to a full scan. It is created and kept up to date automatically, and rebuilt if the biome groups change. Deleting it is safe.
+A search index built from the bank: for each seed, which biome groups appear in each 4×4-cell tile and which is commonest, plus upper bounds on each group's cells in the whole map and its centre (832 bytes per seed). A search first works out every seed's best possible match from the index, coarse to fine (centre and the rest, 16 regions, tiles), then reads and scores exactly only the seeds that could still make the top 10, so most of the bank is never read. Results are identical to a full scan. It is created and kept up to date automatically, and rebuilt if the biome groups change. Deleting it is safe.
 
 **Are new seeds searchable while the bank grows?**
 Yes. Every search re-reads the bank size, so it includes all seeds written so far. Results refresh on your next brush stroke and when a build ends.
 
 **Can banks be combined?**
-No need. Every bank starts at seed 0 and generation is deterministic, so the largest bank already contains any smaller one of the same version. Banks from another version can't be used or converted.
+No need. Every bank starts at seed 0 and generation is deterministic, so the largest bank already contains any smaller one of the same version. Banks from before compression can be converted (see above); banks from other versions can't be used.
 
 **Are sequential seeds less varied than random ones?**
 No. Neighbouring seeds share no more biomes than random pairs (5.1% of cells either way).

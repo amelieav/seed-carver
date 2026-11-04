@@ -1,4 +1,5 @@
 // Thin single-threaded core over cubiomes. Python drives threads; ctypes releases the GIL.
+#include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -80,18 +81,20 @@ API int sc_scan(const uint8_t *data, int count, const uint8_t *cost, const uint1
 #define TILE 4
 #define TILES ((GRID / TILE) * (GRID / TILE))
 
-#define RECORD (TILES * 3 + 32)
+#define RECORD (TILES * 3 + 64)
+#define CENTRE(t) ((t) >> 4 >= 4 && (t) >> 4 < 12 && ((t) & 15) >= 4 && ((t) & 15) < 12)
 
 // Per record: TILES class masks (the OR of class_bit over each 4x4 tile); TILES bytes giving each tile's commonest
 // class (low 4 bits) and how many of its 16 cells hold it, minus one (high 4 bits); then per class a uint16 upper
-// bound on its cells in the whole map: the commonest class's count where it is commonest, else 16 minus that.
+// bound on its cells in the whole map, and in its centre 8x8 tiles: per tile, the commonest class's count where it
+// is commonest, else 16 minus that.
 API void sc_tiles(const uint8_t *data, int count, const uint16_t *class_bit, uint8_t *out)
 {
     const int side = GRID / TILE;
     for (int i = 0; i < count; i++, data += CELLS, out += RECORD) {
-        uint16_t *mask = (uint16_t *)out, *most = (uint16_t *)(out + TILES * 3);
+        uint16_t *mask = (uint16_t *)out, *most = (uint16_t *)(out + TILES * 3), *mid = most + 16;
         uint8_t *dom = out + TILES * 2;
-        memset(most, 0, 32);
+        memset(most, 0, 64);
         for (int t = 0; t < TILES; t++) {
             int n[16] = {0}, best = 0;
             uint16_t m = 0;
@@ -107,25 +110,38 @@ API void sc_tiles(const uint8_t *data, int count, const uint16_t *class_bit, uin
             mask[t] = m;
             dom[t] = (uint8_t)(best | (n[best] ? n[best] - 1 : 0) << 4);
             for (int k = 0; k < 16; k++)
-                if (m >> k & 1)
-                    most[k] += k == best ? n[best] : TILE * TILE - n[best];
+                if (m >> k & 1) {
+                    uint16_t add = (uint16_t)(k == best ? n[best] : TILE * TILE - n[best]);
+                    most[k] += add;
+                    if (CENTRE(t))
+                        mid[k] += add;
+                }
         }
     }
 }
 
-// Per record and group: upper bounds on the map's cells that could hit, and that could hit or be near (uint16 pair).
+// Per record and group, for the centre 8x8 tiles and then the rest of the map: upper bounds on cells that could hit,
+// and that could hit or be near (uint16 pairs).
 API void sc_whole(const uint8_t *tiles, int count, int ng, const uint16_t *hit, const uint16_t *near, uint16_t *out)
 {
     for (int i = 0; i < count; i++, tiles += RECORD) {
-        const uint16_t *most = (const uint16_t *)(tiles + TILES * 3);
-        for (int g = 0; g < ng; g++, out += 2) {
-            uint32_t a = 0, b = 0;
+        const uint16_t *most = (const uint16_t *)(tiles + TILES * 3), *mid = most + 16;
+        for (int g = 0; g < ng; g++, out += 4) {
+            uint32_t ca = 0, cb = 0, ra = 0, rb = 0;
             for (int k = 0; k < 16; k++) {
-                a += hit[g] >> k & 1 ? most[k] : 0;
-                b += (hit[g] | near[g]) >> k & 1 ? most[k] : 0;
+                if (hit[g] >> k & 1) {
+                    ca += mid[k];
+                    ra += most[k] - mid[k];
+                }
+                if ((hit[g] | near[g]) >> k & 1) {
+                    cb += mid[k];
+                    rb += most[k] - mid[k];
+                }
             }
-            out[0] = (uint16_t)(a < CELLS ? a : CELLS);
-            out[1] = (uint16_t)(b < CELLS ? b : CELLS);
+            out[0] = (uint16_t)(ca < CELLS / 4 ? ca : CELLS / 4);
+            out[1] = (uint16_t)(cb < CELLS / 4 ? cb : CELLS / 4);
+            out[2] = (uint16_t)(ra < CELLS * 3 / 4 ? ra : CELLS * 3 / 4);
+            out[3] = (uint16_t)(rb < CELLS * 3 / 4 ? rb : CELLS * 3 / 4);
         }
     }
 }
@@ -246,7 +262,7 @@ typedef struct {
 } Level;
 
 typedef struct {
-    Level level[3]; // whole map, 16 regions, tiles
+    Level level[3]; // centre and the rest, 16 regions, tiles
     uint32_t need, limit;
 } Variant;
 
@@ -263,7 +279,7 @@ API void sc_filter(const uint8_t *tiles, int count, int ng, const uint16_t *hit,
     for (int v = 0; v < nv; v++) {
         const Level *l = &vs[v].level[0];
         uint64_t *out = keys + (size_t)v * count;
-        found[v] = sc_bound(whole, 0, 1, ng, NULL, count, l->reg, l->gi, l->p, l->w, l->n, lv[0], lv[1], lv[2],
+        found[v] = sc_bound(whole, 0, 2, ng, NULL, count, l->reg, l->gi, l->p, l->w, l->n, lv[0], lv[1], lv[2],
                             vs[v].need, vs[v].limit, out, 0);
         for (int k = 0; k < found[v]; k++)
             mark[(uint32_t)out[k]] = 1;
@@ -289,6 +305,22 @@ API void sc_filter(const uint8_t *tiles, int count, int ng, const uint16_t *hit,
         found[v] = sc_bound(caps, 1, TILES, ng, out, found[v], l->reg, l->gi, l->p, l->w, l->n, lv[0], lv[1],
                             lv[2], 0, vs[v].limit, out, 1);
     }
+}
+
+// A drawing (one int16 per cell, -1 unpainted) resized by sx across and sy down, then turned clockwise by degrees,
+// both about the grid's centre, sampling the nearest cell. Cells that land outside the drawing are -1.
+API void sc_transform(const int16_t *drawing, double degrees, double sx, double sy, int16_t *out)
+{
+    double a = degrees * 3.14159265358979323846 / 180, c = cos(a), s = sin(a), half = GRID / 2.0;
+    c = round(c * 1e9) / 1e9;
+    s = round(s * 1e9) / 1e9;
+    for (int r = 0; r < GRID; r++)
+        for (int col = 0; col < GRID; col++) {
+            double x = col + 0.5 - half, y = r + 0.5 - half;
+            double u = (x * c + y * s) / sx + half, v = (-x * s + y * c) / sy + half;
+            int sr = (int)floor(v), sc = (int)floor(u);
+            out[r * GRID + col] = sr >= 0 && sr < GRID && sc >= 0 && sc < GRID ? drawing[sr * GRID + sc] : -1;
+        }
 }
 
 API void sc_palette(uint8_t *rgb)

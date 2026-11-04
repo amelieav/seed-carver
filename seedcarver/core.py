@@ -1,5 +1,6 @@
 """ctypes binding for the compiled C core. Each call releases the GIL, so Python threads scale."""
 import ctypes as C
+from array import array
 import sys
 from pathlib import Path
 
@@ -8,7 +9,7 @@ CELLS = GRID * GRID
 AREA = GRID * 16  # blocks per side of the bank's sampled square; one cell per chunk
 TILE = 4
 TILES = (GRID // TILE) ** 2
-INDEX_RECORD = TILES * 3 + 32
+INDEX_RECORD = TILES * 3 + 64
 
 _ext = {"win32": "dll", "darwin": "dylib"}.get(sys.platform, "so")
 _lib = C.CDLL(str(Path(__file__).with_name(f"libcore.{_ext}")))
@@ -27,6 +28,8 @@ _lib.sc_bound.argtypes = [C.c_void_p, C.c_int, C.c_int, C.c_int, C.c_void_p, C.c
     [C.c_int] + [C.c_uint32] * 5 + [C.c_void_p, C.c_int]
 _lib.sc_filter.argtypes = [C.c_void_p, C.c_int, C.c_int] + [C.c_void_p] * 7 + [C.c_int] + [C.c_void_p] * 3
 _lib.sc_filter.restype = None
+_lib.sc_transform.argtypes = [C.c_void_p, C.c_double, C.c_double, C.c_double, C.c_void_p]
+_lib.sc_transform.restype = None
 _lib.sc_palette.argtypes = [C.c_void_p]
 _lib.sc_palette.restype = None
 _lib.sc_biome_name.argtypes = [C.c_int]
@@ -55,10 +58,9 @@ class Scorer:
 
     def __init__(self, cost, cells, groups, weights, need, id_mask):
         self.n, self.need, self.cost = len(cells), need, cost
-        self.cells = (C.c_uint16 * self.n)(*cells)
-        self.groups = (C.c_uint16 * self.n)(*groups)
-        self.weights = (C.c_uint32 * self.n)(*weights)
-        self.id_mask = (C.c_uint32 * 256)(*id_mask)
+        self.arrays = [array("H", cells), array("H", groups), array("I", weights), array("I", id_mask)]
+        self.cells, self.groups, self.weights, self.id_mask = (
+            ((C.c_uint16 if a.typecode == "H" else C.c_uint32) * len(a)).from_buffer(a) for a in self.arrays)
 
     def __call__(self, buf, count, k):
         """Best k records of a block, as [(score, index)]."""
@@ -79,13 +81,14 @@ def tiles(buf, count, class_bit, out):
 
 
 class Caps:
-    """Per record and group, upper bounds on cells that could hit and that could hit or be near: over the whole map,
-    over 16 regions of 4x4 tiles, and per tile. hit, near: one class mask per group."""
+    """Per record and group, upper bounds on cells that could hit and that could hit or be near: over the centre 8x8
+    tiles and the rest of the map (whole), over 16 regions of 4x4 tiles, and per tile. hit, near: one class mask per
+    group."""
 
     def __init__(self, count, hit, near):
         self.ng = len(hit)
         self.hit, self.near = (C.c_uint16 * self.ng)(*hit), (C.c_uint16 * self.ng)(*near)
-        self.whole = bytearray(count * self.ng * 4)
+        self.whole = bytearray(count * self.ng * 8)
         self.regions = bytearray(count * self.ng * 16 * 4)
         self.tiles = bytearray(count * self.ng * TILES * 2)
 
@@ -146,6 +149,15 @@ class Filter:
         _lib.sc_filter(_ptr(buf), count, c.ng, c.hit, c.near, self.lv, _ptr(c.whole), _ptr(c.regions), _ptr(c.tiles),
                        _ptr(self.mark), self.nv, self.vs, self.keys, self.found)
         return [self.keys[v * count:v * count + self.found[v]] for v in range(self.nv)]
+
+
+def transform(drawing, degrees, sx, sy):
+    """Drawing (CELLS group indexes, -1 unpainted) resized by sx across and sy down, then turned clockwise by degrees,
+    about the grid's centre."""
+    src = array("h", drawing)
+    out = array("h", bytes(2 * CELLS))
+    _lib.sc_transform((C.c_int16 * CELLS).from_buffer(src), degrees, sx, sy, (C.c_int16 * CELLS).from_buffer(out))
+    return out.tolist()
 
 
 def palette():
