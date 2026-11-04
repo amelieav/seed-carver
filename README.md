@@ -73,6 +73,15 @@ World spawn is near 0,0 but not exactly on it, and may be some way off.
 **How is a match scored?**
 Each painted cell scores full for the same group, half for a similar group (forest and plains) or a river or beach, and nothing otherwise. Unpainted cells are ignored. The percentage is points earned out of points possible, and the top 10 seeds are shown.
 
+**How well do painted rivers match?**
+Roughly, not exactly. Rivers are much thinner than a cell, so a sample often misses one. On a 10M bank, top results for a painted line had a river within 64 blocks of about 80% of its cells, against about 47% for random seeds.
+
+**Where does the app look for the bank?**
+Only for a file named exactly `seeds.bank`, directly beside the exe. Subfolders and other names are ignored.
+
+**Are new seeds searchable while the bank grows?**
+Yes. Every search re-reads the bank size, so it includes all seeds written so far. Results refresh on your next brush stroke and when a build ends.
+
 **Are sequential seeds less varied than random ones?**
 No. Neighbouring seeds share no more biomes than random pairs (5.1% of cells either way).
 

@@ -4,6 +4,7 @@ from . import core
 GROUPS = {
     "Ocean": "ocean cold_ocean lukewarm_ocean warm_ocean frozen_ocean",
     "Deep ocean": "deep_ocean deep_cold_ocean deep_lukewarm_ocean deep_frozen_ocean",
+    "River": "river frozen_river",
     "Plains": "plains sunflower_plains meadow",
     "Forest": "forest flower_forest birch_forest old_growth_birch_forest dark_forest pale_garden",
     "Taiga": "taiga old_growth_pine_taiga old_growth_spruce_taiga",
@@ -17,7 +18,7 @@ GROUPS = {
     "Cherry": "cherry_grove",
     "Mushroom": "mushroom_fields",
 }
-# Thin features a 256-block cell lands on by chance: half cost whatever was painted.
+# Thin features a cell's single sample lands on by chance: half cost whatever was painted.
 EDGES = "river frozen_river beach snowy_beach stony_shore".split()
 SIMILAR = [
     ("Ocean", "Deep ocean"), ("Plains", "Forest"), ("Plains", "Savanna"), ("Forest", "Taiga"), ("Forest", "Swamp"),
