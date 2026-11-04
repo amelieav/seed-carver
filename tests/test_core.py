@@ -14,8 +14,8 @@ class Core(unittest.TestCase):
         self.assertEqual(core.biome_name(core.biome_map(262, 0, 0, 4, 1, 1)[0]), "mushroom_fields")
 
     def test_every_generated_biome_has_a_group(self):
-        buf = bytearray(4096 * core.CELLS)
-        core.gen_block(0, 4096, buf)
+        buf = bytearray(500 * core.CELLS)
+        core.gen_block(0, 500, buf)
         known = {i for m in biomes.MEMBERS for i in m}
         known |= {i for i in range(256) if core.biome_name(i) in biomes.EDGES}
         self.assertEqual({core.biome_name(b) for b in set(buf) - known}, set())
@@ -23,11 +23,8 @@ class Core(unittest.TestCase):
     def test_block_matches_map(self):
         buf = bytearray(core.CELLS)
         core.gen_block(7, 1, buf)
-        step = 256
-        full = core.biome_map(7, -core.AREA // 2, -core.AREA // 2, step, 16, 16)
-        # the bank skips the +-16 block shift noise, so only near-total agreement is expected
-        same = sum(a == b for a, b in zip(buf, full))
-        self.assertGreater(same, 230)
+        half = core.AREA // 2
+        self.assertEqual(buf, core.biome_map(7, -half, -half, 16, core.GRID, core.GRID))
 
 
 class App(unittest.TestCase):
@@ -46,13 +43,13 @@ class Bank(unittest.TestCase):
 
     def test_build_resumes_identically(self):
         stop = threading.Event()
-        bank.build(self.path, 10000, stop=stop, progress=lambda d, t: stop.set(), threads=1)
-        self.assertLess(bank.count(self.path), 10000)
+        bank.build(self.path, 600, stop=stop, progress=lambda d, t: stop.set(), threads=1)
+        self.assertLess(bank.count(self.path), 600)
         with open(self.path, "ab") as f:
             f.write(b"x" * 100)  # torn write from a crash
-        self.assertEqual(bank.build(self.path, 10000, threads=2), 10000)
+        self.assertEqual(bank.build(self.path, 600, threads=2), 600)
         fresh = self.path + "2"
-        bank.build(fresh, 10000, threads=4)
+        bank.build(fresh, 600, threads=4)
         with open(self.path, "rb") as a, open(fresh, "rb") as b:
             self.assertEqual(a.read(), b.read())
 
@@ -63,9 +60,9 @@ class Bank(unittest.TestCase):
             bank.count(self.path)
 
     def test_search_finds_a_seed_from_its_own_map(self):
-        bank.build(self.path, 20000)
+        bank.build(self.path, 1500)
         buf = bytearray(core.CELLS)
-        seed = 12345
+        seed = 1234
         core.gen_block(seed, 1, buf)
         to_group = {i: g for g, m in enumerate(biomes.MEMBERS) for i in m}
         drawing = [to_group.get(b, -1) for b in buf]

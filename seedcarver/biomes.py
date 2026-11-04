@@ -18,7 +18,7 @@ GROUPS = {
     "Cherry": "cherry_grove",
     "Mushroom": "mushroom_fields",
 }
-# Thin features a cell's single sample lands on by chance: half cost whatever was painted.
+# Rivers and shores cut through any land without being painted: half cost whatever was painted.
 EDGES = "river frozen_river beach snowy_beach stony_shore".split()
 SIMILAR = [
     ("Ocean", "Deep ocean"), ("Plains", "Forest"), ("Plains", "Savanna"), ("Forest", "Taiga"), ("Forest", "Swamp"),

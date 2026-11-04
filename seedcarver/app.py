@@ -11,7 +11,7 @@ import webview
 from . import bank, biomes, core
 from .paths import BANK
 
-MAP_STEP = 8  # blocks per preview pixel
+MAP_STEP = 4  # blocks per preview pixel: the biome map's native resolution
 MAP_SIZE = core.AREA // MAP_STEP
 
 

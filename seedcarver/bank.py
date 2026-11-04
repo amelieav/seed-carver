@@ -1,4 +1,4 @@
-"""The seed bank: flat file of raw biome ids, one 256-byte record per seed, seed = record index."""
+"""The seed bank: flat file of raw biome ids, one record of core.CELLS bytes per seed, seed = record index."""
 import heapq
 import os
 import threading
@@ -7,10 +7,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import biomes, core
 
-MAGIC = b"SEEDCARVER1\n\0\0\0\0"  # bump when the sampling or file layout changes
+MAGIC = b"SEEDCARVER2\n\0\0\0\0"  # bump when the sampling or file layout changes
 HEADER = len(MAGIC)
-BUILD_BLOCK = 4096
-SCAN_BLOCK = 16384
+BUILD_BLOCK = 256
+SCAN_BLOCK = 1024
 THREADS = os.cpu_count() or 4
 
 
@@ -19,7 +19,7 @@ def count(path):
     try:
         with open(path, "rb") as f:
             if f.read(HEADER) != MAGIC:
-                raise ValueError(f"{path} is not a seed bank (or is from another version)")
+                raise ValueError(f"{path} is from another version. Delete or move it to build a new bank.")
     except FileNotFoundError:
         return 0
     return (os.path.getsize(path) - HEADER) // core.CELLS
@@ -61,7 +61,8 @@ def search(path, drawing, k=10, threads=THREADS):
         raise ValueError("drawing is empty")
     total = count(path)
     cells = array("H", painted)
-    cost = b"".join(biomes.COST[drawing[i]] for i in painted)
+    groups = array("H", (drawing[i] for i in painted))
+    cost = b"".join(biomes.COST)
     local = threading.local()
     files = []
 
@@ -73,7 +74,7 @@ def search(path, drawing, k=10, threads=THREADS):
         n = min(SCAN_BLOCK, total - start)
         local.f.seek(HEADER + start * core.CELLS)
         local.f.readinto(local.buf)
-        return [(s, start + i) for s, i in core.scan(local.buf, n, cost, cells, k)]
+        return [(s, start + i) for s, i in core.scan(local.buf, n, cost, cells, groups, k)]
 
     with ThreadPoolExecutor(threads) as pool:
         hits = heapq.nsmallest(k, (h for block in pool.map(scan, range(0, total, SCAN_BLOCK)) for h in block))

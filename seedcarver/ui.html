@@ -62,8 +62,8 @@
       <h2>Tool</h2>
       <div class="row seg" id="tools">
         <button data-size="1" aria-pressed="false">1</button>
-        <button data-size="2" aria-pressed="true">2</button>
-        <button data-size="4" aria-pressed="false">4</button>
+        <button data-size="4" aria-pressed="true">4</button>
+        <button data-size="8" aria-pressed="false">8</button>
         <button data-size="0" aria-pressed="false" title="Flood fill">Fill</button>
       </div>
       <div class="row" style="margin-top:6px"><button id="clear">Clear drawing</button></div>
@@ -74,10 +74,10 @@
       <progress id="progress" max="1" value="0" hidden></progress>
       <div class="row" style="margin-top:6px">
         <select id="target" aria-label="Bank size">
+          <option value="100000">100k seeds</option>
           <option value="1000000">1M seeds</option>
+          <option value="5000000">5M seeds</option>
           <option value="10000000">10M seeds</option>
-          <option value="50000000">50M seeds</option>
-          <option value="100000000">100M seeds</option>
         </select>
         <button id="grow">Build</button>
       </div>
@@ -87,8 +87,8 @@
   <main>
     <div id="stage">
       <div class="pane">
-        <header><h2>Your drawing: 4 km around 0,0, north up</h2></header>
-        <div class="frame"><canvas id="draw" width="480" height="480" tabindex="0" aria-label="Biome drawing grid"></canvas></div>
+        <header><h2>Your drawing: 1 km around 0,0, each cell one chunk</h2></header>
+        <div class="frame"><canvas id="draw" width="512" height="512" tabindex="0" aria-label="Biome drawing grid"></canvas></div>
       </div>
       <div class="pane">
         <header>
@@ -100,7 +100,7 @@
         </header>
         <div class="frame">
           <canvas id="map"></canvas>
-          <canvas id="overlay" width="480" height="480"></canvas>
+          <canvas id="overlay" width="512" height="512"></canvas>
           <div id="empty">Paint biomes on the left. The best seeds appear when you lift the brush.</div>
         </div>
       </div>
@@ -112,15 +112,14 @@
 <div id="tip"></div>
 <script>
 const $ = id => document.getElementById(id);
-let api, cfg, cells, cell, brush = 0, size = 2, painting = false, current = null, currentIds = null;
+let api, cfg, cells, cell, brush = 0, size = 4, painting = false, current = null, currentIds = null;
 let searching = false, searchAgain = false;
-const SEED_BYTES = 256;
 
 window.addEventListener('pywebviewready', async () => {
   api = window.pywebview.api;
   cfg = await api.init();
   cells = new Array(cfg.grid * cfg.grid).fill(-1);
-  cell = 480 / cfg.grid;
+  cell = 512 / cfg.grid;
   buildBrushes();
   drawGrid();
   describeTarget();
@@ -144,7 +143,7 @@ function buildBrushes() {
 }
 
 function fillCells(ctx, alpha) {
-  ctx.clearRect(0, 0, 480, 480);
+  ctx.clearRect(0, 0, 512, 512);
   ctx.globalAlpha = alpha;
   cells.forEach((g, i) => {
     if (g < 0) return;
@@ -157,13 +156,16 @@ function fillCells(ctx, alpha) {
 function drawGrid() {
   const ctx = $('draw').getContext('2d');
   fillCells(ctx, 1);
-  ctx.strokeStyle = '#ffffff14';
-  ctx.beginPath();
-  for (let i = 1; i < cfg.grid; i++) {
-    ctx.moveTo(i * cell + .5, 0); ctx.lineTo(i * cell + .5, 480);
-    ctx.moveTo(0, i * cell + .5); ctx.lineTo(480, i * cell + .5);
+  // faint line per chunk, stronger every 8 chunks
+  for (const [every, color] of [[1, '#ffffff0c'], [8, '#ffffff2e']]) {
+    ctx.strokeStyle = color;
+    ctx.beginPath();
+    for (let i = every; i < cfg.grid; i += every) {
+      ctx.moveTo(i * cell + .5, 0); ctx.lineTo(i * cell + .5, 512);
+      ctx.moveTo(0, i * cell + .5); ctx.lineTo(512, i * cell + .5);
+    }
+    ctx.stroke();
   }
-  ctx.stroke();
   crosshair(ctx);
   drawOverlay();
 }
@@ -171,15 +173,15 @@ function drawGrid() {
 function crosshair(ctx) {
   ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(232, 240); ctx.lineTo(248, 240);
-  ctx.moveTo(240, 232); ctx.lineTo(240, 248);
+  ctx.moveTo(248, 256); ctx.lineTo(264, 256);
+  ctx.moveTo(256, 248); ctx.lineTo(256, 264);
   ctx.stroke();
   ctx.lineWidth = 1;
 }
 
 function drawOverlay() {
   const ctx = $('overlay').getContext('2d');
-  ctx.clearRect(0, 0, 480, 480);
+  ctx.clearRect(0, 0, 512, 512);
   if ($('showOverlay').checked) fillCells(ctx, .55);
   if (current !== null) crosshair(ctx);
 }
@@ -307,7 +309,7 @@ $('map').addEventListener('mouseleave', () => $('tip').style.display = 'none');
 
 function describeTarget() {
   const n = +$('target').value;
-  $('targetinfo').textContent = `${(n * SEED_BYTES / 1e9).toFixed(n < 1e7 ? 2 : 1)} GB on disk`;
+  $('targetinfo').textContent = `${(n * cfg.grid * cfg.grid / 1e9).toFixed(1)} GB on disk`;
 }
 $('target').onchange = describeTarget;
 

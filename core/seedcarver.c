@@ -6,9 +6,9 @@
 #include "util.h"
 
 #define MC MC_NEWEST
-#define GRID 16
+#define GRID 64
 #define CELLS (GRID * GRID)
-#define SPAN 256 // blocks per bank cell
+#define SPAN 16 // blocks per bank cell: one chunk
 
 #ifdef _WIN32
 #define API __declspec(dllexport)
@@ -34,7 +34,7 @@ API void sc_gen_block(uint64_t start, int count, uint8_t *out)
     for (int i = 0; i < count; i++, out += CELLS) {
         setBiomeSeed(&bn, start + i, 0);
         sample(&bn, -GRID * SPAN / 2, -GRID * SPAN / 2, SPAN, GRID, GRID,
-               SAMPLE_NO_DEPTH | SAMPLE_NO_SHIFT, out);
+               SAMPLE_NO_DEPTH, out);
     }
 }
 
@@ -46,17 +46,16 @@ API void sc_map(uint64_t seed, int x0, int z0, int step, int w, int h, uint8_t *
     sample(&bn, x0, z0, step, w, h, SAMPLE_NO_DEPTH, out);
 }
 
-// Lowest-score records in a block. cost is n*256 bytes, cells holds the n painted indexes.
+// Lowest-score records in a block. cost is 256 bytes per group; cells and groups list the n painted cells.
 // Returns hits found (<= k); idx/score sorted best first.
-API int sc_scan(const uint8_t *data, int count, const uint8_t *cost, const uint16_t *cells, int n,
-                int k, uint32_t *idx, uint32_t *score)
+API int sc_scan(const uint8_t *data, int count, const uint8_t *cost, const uint16_t *cells,
+                const uint16_t *groups, int n, int k, uint32_t *idx, uint32_t *score)
 {
     int found = 0;
     for (int i = 0; i < count; i++, data += CELLS) {
         uint32_t limit = found == k ? score[k - 1] : UINT32_MAX, s = 0;
-        const uint8_t *c = cost;
-        for (int j = 0; j < n && s < limit; j++, c += 256)
-            s += c[data[cells[j]]];
+        for (int j = 0; j < n && s < limit; j++)
+            s += cost[groups[j] * 256 + data[cells[j]]];
         if (s >= limit)
             continue;
         int p = found < k ? found++ : k - 1;
