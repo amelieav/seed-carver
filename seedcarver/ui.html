@@ -329,6 +329,10 @@ async function poll() {
   $('progress').hidden = !b;
   $('grow').textContent = b ? 'Stop' : 'Build';
   $('target').disabled = !!b;
+  const sizes = [...$('target').options];
+  sizes.forEach(o => o.disabled = +o.value <= s.seeds);
+  if (+$('target').value <= s.seeds) { $('target').value = (sizes.find(o => !o.disabled) || sizes.at(-1)).value; describeTarget(); }
+  $('grow').disabled = !b && +$('target').value <= s.seeds;
   if (buildingLast && !b && cells.some(g => g >= 0)) runSearch();
   buildingLast = !!b;
 }
