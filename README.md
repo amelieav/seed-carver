@@ -2,13 +2,13 @@
 
 Paint biomes on a grid, get the Minecraft Java seeds that match best, preview them. Fully offline.
 
-Biomes come from [cubiomes](https://github.com/Cubitect/cubiomes), using its newest model (1.21.4). The app searches a local bank of seeds, each stored as a 16×16 surface biome map of the 4 km square around 0,0.
+Biomes come from [cubiomes](https://github.com/Cubitect/cubiomes), using its newest model (1.21.4). The app searches a local bank of seeds, each stored as a surface biome map of the 1 km square around 0,0, with one 64×64 grid cell per chunk.
 
 ## Download
 
 From the Releases page, get `SeedCarver-windows.zip` (exe plus 1M seeds), unzip it, run `SeedCarver.exe`. Needs the WebView2 runtime, which Windows 11 includes. The exe is unsigned, so SmartScreen may warn.
 
-The app keeps `seeds.bank` beside the exe. Grow it with **Build** in the sidebar, or download `seeds-10M.zip` and put its `seeds.bank` there instead.
+The app keeps `seeds.bank` beside the exe. Grow it with **Build** in the sidebar.
 
 ## Build from source
 
@@ -25,48 +25,48 @@ python -m unittest
 ```
 
 ```bash
-python -m seedcarver bench          # time 100k seeds on your PC
-python -m seedcarver build 10000000 # build or grow the bank; safe to interrupt
+python -m seedcarver bench          # time 10k seeds on your PC
+python -m seedcarver build 1000000  # build or grow the bank; safe to interrupt
 python -m seedcarver                # open the app
-python build.py --exe               # standalone exe in dist/
+python build.py --exe               # standalone exe in dist/ (close the app first)
 ```
 
 ## Bank size
 
-Building and searching on an i5-12600K (16 threads, 11k seeds/s):
+Each seed takes 4,096 bytes. On an i5-12600K (16 threads), measured at 461 seeds/s while a second build was running, so expect faster on an idle PC:
 
 | Seeds | Build | Disk | Search |
 |---|---|---|---|
-| 1M | 1.5 min | 256 MB | 0.05 s |
-| 10M | 15 min | 2.6 GB | 0.4 s |
-| 100M | 2.5 h (estimate) | 26 GB | 4 s (estimate) |
+| 100k | 4 min | 0.4 GB | 0.2 s (estimate) |
+| 1M | 36 min | 4.1 GB | 0.6-1.7 s |
+| 10M | 6 h (estimate) | 41 GB | 6-17 s (estimate) |
 
 Best match by bank size:
 
-| Drawing | 100k | 1M | 10M |
+| Drawing | 10k | 100k | 1M |
 |---|---|---|---|
-| Island: ocean, plains, forest | 57% | 60% | 61% |
-| Half desert, half snow | 50% | 51% | 60% |
-| 2 km cherry patch, rest ignored | 20% | 23% | 26% |
+| Island: ocean, plains, forest | 60% | 64% | 68% |
+| Half desert, half snow | 54% | 54% | 55% |
+| 500-block cherry patch, rest ignored | 41% | 54% | 66% |
 
-More seeds help slowly, so 10M is a good stopping point. Rare biomes and shapes the terrain can't make stay low at any size.
+Start with 1M. Rare biomes improve most with more seeds, and shapes the terrain can't make stay low at any size.
 
 ## FAQ
 
 **Does building add to `seeds.bank`?**
-Yes. Build appends after the last complete seed, so growing 1M to 10M generates only the 9M new seeds. Stopping or crashing loses at most the unfinished record, and the next build resumes there.
+Yes. Build appends after the last complete seed, so growing 1M to 5M generates only the 4M new seeds. Stopping or crashing loses at most the unfinished record, and the next build resumes there.
 
 **What format is the bank?**
-Raw binary: a 16-byte header, then 256 bytes per seed. Seeds run sequentially from 0, so the seed is the record's position and isn't stored. Each byte is a cubiomes biome ID, in rows north to south, each west to east:
+Raw binary: a 16-byte header, then 4,096 bytes per seed. Seeds run sequentially from 0, so the seed is the record's position and isn't stored. Each byte is a cubiomes biome ID, in rows north to south, each west to east:
 
 ```
-offset = 16 + seed * 256 + row * 16 + column
+offset = 16 + seed * 4096 + row * 64 + column
 ```
 
 Raw IDs are kept rather than groups, so groups and scoring can change without rebuilding.
 
 **What area does a match look at?**
-A fixed square, x and z from -2048 to +2048, not a radius. It is split into 16×16 cells of 256 blocks, and each cell is one surface biome sample at its centre. Your drawing is only compared at that position, never shifted or rotated. Features smaller than a cell can be missed, so judge them in the preview.
+A fixed square, x and z from -512 to +512, not a radius. It is split into 64×64 cells lined up with chunks, and each cell is one surface biome sample at its centre. Your drawing is only compared at that position, never shifted or rotated.
 
 World spawn is near 0,0 but not exactly on it, and may be some way off.
 
@@ -74,13 +74,16 @@ World spawn is near 0,0 but not exactly on it, and may be some way off.
 Each painted cell scores full for the same group, half for a similar group (forest and plains) or a river or beach, and nothing otherwise. Unpainted cells are ignored. The percentage is points earned out of points possible, and the top 10 seeds are shown.
 
 **How well do painted rivers match?**
-Roughly, not exactly. Rivers are much thinner than a cell, so a sample often misses one. On a 10M bank, top results for a painted line had a river within 64 blocks of about 80% of its cells, against about 47% for random seeds.
+Closely, but rarely exactly. On a 1M bank, top results for a painted line had a river within 16 blocks of 70-79% of its cells, against about 20% for random seeds.
 
 **Where does the app look for the bank?**
 Only for a file named exactly `seeds.bank`, directly beside the exe. Subfolders and other names are ignored.
 
 **Are new seeds searchable while the bank grows?**
 Yes. Every search re-reads the bank size, so it includes all seeds written so far. Results refresh on your next brush stroke and when a build ends.
+
+**Can banks be combined?**
+No need. Every bank starts at seed 0 and generation is deterministic, so the largest bank already contains any smaller one of the same version. Banks from another version can't be used or converted.
 
 **Are sequential seeds less varied than random ones?**
 No. Neighbouring seeds share no more biomes than random pairs (5.1% of cells either way).
