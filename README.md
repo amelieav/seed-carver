@@ -18,7 +18,7 @@ Needs Python 3.12 and `gcc` on PATH (on Windows: [MSYS2](https://www.msys2.org) 
 git clone --recursive https://github.com/amelieav/seed-carver
 cd seed-carver
 python -m venv .venv
-.venv/Scripts/activate
+source .venv/Scripts/activate
 pip install -r requirements.txt
 python build.py
 python -m unittest
