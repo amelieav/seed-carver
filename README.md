@@ -1,4 +1,4 @@
-<img width="1409" height="836" alt="Screenshot 2026-11-04 151150" src="https://github.com/user-attachments/assets/cac55c80-885e-4132-b3aa-618bf364ba04" />
+<img width="1335" height="819" alt="image" src="https://github.com/user-attachments/assets/c2b4f385-92a0-46f6-a138-93320d975760" />
 
 # Seed Carver
 
