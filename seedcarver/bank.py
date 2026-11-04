@@ -1,5 +1,5 @@
 """The seed bank: flat file of raw biome ids, one record of core.CELLS bytes per seed, seed = record index."""
-import heapq
+import ctypes
 import os
 import threading
 from array import array
@@ -12,6 +12,8 @@ MAGIC = b"SEEDCARVER2\n\0\0\0\0"  # bump when the sampling or file layout change
 HEADER = len(MAGIC)
 BUILD_BLOCK = 256
 SCAN_BLOCK = 1024
+BATCH = 16
+DENSE = SCAN_BLOCK // 16  # more candidates than this in a block: one sequential read beats many small ones
 THREADS = os.cpu_count() or 4
 
 
@@ -54,8 +56,8 @@ def build(path, target, progress=None, stop=None, threads=THREADS):
     return done
 
 
-INDEX_MAGIC = b"SEEDCARVERIDX1\n\0"
-INDEX_RECORD = core.TILES * 2
+INDEX_MAGIC = b"SEEDCARVERIDX2\n\0"
+INDEX_RECORD = core.INDEX_RECORD
 _index_lock = threading.Lock()
 
 
@@ -100,21 +102,25 @@ def index(path, total, threads=THREADS):
                 g.close()
 
 
-def _bound(drawing, weights, need):
+def _bound(cells, groups, weights, need):
     rep = {}
     for i, bit in enumerate(biomes.CLASS_BIT):
         rep.setdefault(bit, i)
     rep.pop(0, None)
     per_tile = Counter()
-    for (cell, g), w in zip(drawing, weights):
+    weight = {}
+    for cell, g, w in zip(cells, groups, weights):
         row, col = divmod(cell, core.GRID)
-        per_tile[(row // core.TILE) * (core.GRID // core.TILE) + col // core.TILE, g] += w
+        per_tile[(row // core.TILE) * (core.GRID // core.TILE) + col // core.TILE, g] += 1
+        weight[g] = w
     entries = []
-    for (tile, g), w in per_tile.items():
-        hit = sum(bit for bit, i in rep.items() if biomes.COST[g][i] == biomes.HIT)
-        near = sum(bit for bit, i in rep.items() if biomes.COST[g][i] == biomes.NEAR)
-        entries.append((tile, hit, near, biomes.HIT * w, biomes.NEAR * w, biomes.MISS * w))
-    return core.Bound(entries, need)
+    for (tile, g), p in per_tile.items():
+        cost = biomes.COST[g]
+        hit = sum(bit for bit, i in rep.items() if cost[i] == biomes.HIT)
+        near = sum(bit for bit, i in rep.items() if cost[i] == biomes.NEAR)
+        level = [cost[rep[1 << c]] if 1 << c in rep else biomes.MISS for c in range(16)]
+        entries.append((tile, hit, near, level, p, weight[g]))
+    return core.Bound(entries, (biomes.HIT, biomes.NEAR, biomes.MISS), need)
 
 
 def search(path, drawing, k=10, threads=THREADS, all_brushes=False):
@@ -144,11 +150,22 @@ def search(path, drawing, k=10, threads=THREADS, all_brushes=False):
         for i in biomes.MEMBERS[g]:
             id_mask[i] |= 1 << g
     need = sum(1 << g for g in used) if all_brushes else 0
-    bound = _bound(zip(cells, groups), weights, need)
+    bound = _bound(cells, groups, weights, need)
+    scorer = core.Scorer(cost, cells, groups, weights, need, id_mask)
     idx_header = len(_index_header())
     best = []
     limit = [2**32 - 1]
+    cutoff = [(2**32, 0)]
     lock = threading.Lock()
+
+    def merge(hits):
+        with lock:
+            best.extend(hits)
+            best.sort()
+            del best[k:]
+            if len(best) == k:
+                limit[0], cutoff[0] = best[-1][0], best[-1]
+
     local = threading.local()
     files = []
 
@@ -158,22 +175,31 @@ def search(path, drawing, k=10, threads=THREADS, all_brushes=False):
             local.idx = open(f"{path}.idx", "rb")
             files.extend((local.f, local.idx))
             local.tiles = bytearray(SCAN_BLOCK * INDEX_RECORD)
-            local.rec = bytearray(core.CELLS)
+            local.keys = (ctypes.c_uint64 * SCAN_BLOCK)()
+            local.recs = bytearray(BATCH * core.CELLS)
+            local.chunk = bytearray(SCAN_BLOCK * core.CELLS)
         n = min(SCAN_BLOCK, total - start)
         local.idx.seek(idx_header + start * INDEX_RECORD)
         local.idx.readinto(local.tiles)
-        for b, i in bound(local.tiles, n, limit[0]):
-            if b > limit[0]:
+        found = bound(local.tiles, n, limit[0], local.keys)
+        if found > DENSE:
+            local.f.seek(HEADER + start * core.CELLS)
+            local.f.readinto(local.chunk)
+            merge([(s, start + i) for s, i in scorer(local.chunk, n, k)])
+            return
+        view = memoryview(local.recs)
+        for first in range(0, found, BATCH):
+            seeds = []
+            for key in local.keys[first:min(first + BATCH, found)]:
+                seed = start + (key & 0xFFFFFFFF)
+                if (key >> 32, seed) > cutoff[0]:
+                    break
+                local.f.seek(HEADER + seed * core.CELLS)
+                local.f.readinto(view[len(seeds) * core.CELLS:(len(seeds) + 1) * core.CELLS])
+                seeds.append(seed)
+            if not seeds:
                 break
-            local.f.seek(HEADER + (start + i) * core.CELLS)
-            local.f.readinto(local.rec)
-            for s, _ in core.scan(local.rec, 1, cost, cells, groups, weights, need, id_mask, 1):
-                with lock:
-                    best.append((s, start + i))
-                    best.sort()
-                    del best[k:]
-                    if len(best) == k:
-                        limit[0] = best[-1][0]
+            merge([(s, seeds[i]) for s, i in scorer(local.recs, len(seeds), k)])
 
     try:
         with ThreadPoolExecutor(threads) as pool:

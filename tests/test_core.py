@@ -1,5 +1,6 @@
 """Run with `python -m unittest` after `python build.py`."""
 import base64
+import ctypes
 import os
 import tempfile
 import threading
@@ -108,6 +109,9 @@ class Bank(unittest.TestCase):
             f.seek(bank.HEADER)
             f.readinto(buf)
         cost = b"".join(biomes.COST)
+        with open(self.path + ".idx", "rb") as f:
+            f.seek(len(bank._index_header()))
+            tiles = bytearray(f.read())
         for all_brushes in (False, True):
             for _ in range(4):
                 drawing = [-1] * core.CELLS
@@ -126,6 +130,12 @@ class Bank(unittest.TestCase):
                         id_mask[i] |= 1 << g
                 need = sum(1 << g for g in used) if all_brushes else 0
                 want = core.scan(buf, 3000, cost, cells, groups, weights, need, id_mask, 10)
+                exact = dict((i, sc) for sc, i in core.scan(buf, 3000, cost, cells, groups, weights, need, id_mask, 3000))
+                keys = (ctypes.c_uint64 * 3000)()
+                found = bank._bound(cells, groups, weights, need)(tiles, 3000, 2**32 - 1, keys)
+                bounds = {key & 0xFFFFFFFF: key >> 32 for key in keys[:found]}
+                self.assertEqual(set(bounds), set(exact))
+                self.assertTrue(all(bounds[i] <= exact[i] for i in exact))
                 worst = biomes.MISS * sum(weights)
                 self.assertEqual(bank.search(self.path, drawing, all_brushes=all_brushes),
                                  [(i, 1 - s / worst) for s, i in want])

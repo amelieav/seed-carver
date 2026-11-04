@@ -80,13 +80,29 @@ API int sc_scan(const uint8_t *data, int count, const uint8_t *cost, const uint1
 #define TILE 4
 #define TILES ((GRID / TILE) * (GRID / TILE))
 
-// Per record, one class mask per 4x4 tile: the OR of class_bit over the tile's cells.
-API void sc_tiles(const uint8_t *data, int count, const uint16_t *class_bit, uint16_t *out)
+// Per record: TILES class masks (the OR of class_bit over each 4x4 tile), then TILES bytes giving each tile's
+// commonest class (low 4 bits) and how many of its 16 cells hold it, minus one (high 4 bits).
+API void sc_tiles(const uint8_t *data, int count, const uint16_t *class_bit, uint8_t *out)
 {
-    for (int i = 0; i < count; i++, data += CELLS, out += TILES) {
-        memset(out, 0, TILES * sizeof *out);
-        for (int c = 0; c < CELLS; c++)
-            out[(c / GRID / TILE) * (GRID / TILE) + (c % GRID) / TILE] |= class_bit[data[c]];
+    const int side = GRID / TILE;
+    for (int i = 0; i < count; i++, data += CELLS, out += TILES * 3) {
+        uint16_t *mask = (uint16_t *)out;
+        uint8_t *dom = out + TILES * 2;
+        for (int t = 0; t < TILES; t++) {
+            int n[16] = {0}, best = 0;
+            uint16_t m = 0;
+            for (int c = 0; c < TILE * TILE; c++) {
+                uint16_t bit = class_bit[data[(t / side * TILE + c / TILE) * GRID + t % side * TILE + c % TILE]];
+                m |= bit;
+                if (bit)
+                    n[__builtin_ctz(bit)]++;
+            }
+            for (int k = 1; k < 16; k++)
+                if (n[k] > n[best])
+                    best = k;
+            mask[t] = m;
+            dom[t] = (uint8_t)(best | (n[best] ? n[best] - 1 : 0) << 4);
+        }
     }
 }
 
@@ -96,26 +112,40 @@ static int cmp_u64(const void *a, const void *b)
     return (x > y) - (x < y);
 }
 
-// Lower bound of each record's score from its tile masks. Each of the n entries is one painted group in one tile:
-// it costs w_hit if the tile holds a hit class, else w_near if it holds a near class, else w_miss.
+// Lower bound of each record's score from its tiles. Each of the n entries is one painted group in one tile, with
+// p painted cells of weight w each. level holds 16 bytes per entry, the cost of each class for its group; hit and
+// near are the classes costing lv_hit and lv_near. In a tile whose commonest class covers c cells, at least
+// p - (16 - c) painted cells fall on that class, and the rest cost no less than the best class present.
 // Writes records whose bound <= limit and that hold every class of need as keys bound << 32 | index, sorted.
-API int sc_bound(const uint16_t *tiles, int count, const uint16_t *tile, const uint16_t *hit, const uint16_t *near,
-                 const uint32_t *w_hit, const uint32_t *w_near, const uint32_t *w_miss, int n, uint32_t need,
-                 uint32_t limit, uint64_t *keys)
+API int sc_bound(const uint8_t *tiles, int count, const uint16_t *tile, const uint16_t *hit, const uint16_t *near,
+                 const uint8_t *level, const uint8_t *p, const uint32_t *w, int n, uint32_t lv_hit, uint32_t lv_near,
+                 uint32_t lv_miss, uint32_t need, uint32_t limit, uint64_t *keys)
 {
     int found = 0;
-    for (int i = 0; i < count; i++, tiles += TILES) {
+    for (int i = 0; i < count; i++, tiles += TILES * 3) {
+        const uint16_t *mask = (const uint16_t *)tiles;
+        const uint8_t *dom = tiles + TILES * 2;
         if (need) {
             uint32_t seen = 0;
             for (int t = 0; t < TILES; t++)
-                seen |= tiles[t];
+                seen |= mask[t];
             if ((seen & need) != need)
                 continue;
         }
         uint32_t s = 0;
         for (int j = 0; j < n && s <= limit; j++) {
-            uint16_t m = tiles[tile[j]];
-            s += m & hit[j] ? w_hit[j] : m & near[j] ? w_near[j] : w_miss[j];
+            uint16_t m = mask[tile[j]];
+            uint32_t best = m & hit[j] ? lv_hit : m & near[j] ? lv_near : lv_miss;
+            if (!m) {
+                s += lv_miss * p[j] * w[j];
+                continue;
+            }
+            int d = dom[tile[j]] & 15, c = (dom[tile[j]] >> 4) + 1, x = p[j] - (TILE * TILE - c);
+            uint32_t ld = level[j * 16 + d];
+            if (x > 0)
+                s += (x * ld + (p[j] - x) * best) * w[j];
+            else
+                s += p[j] * best * w[j];
         }
         if (s <= limit)
             keys[found++] = (uint64_t)s << 32 | (uint32_t)i;
