@@ -132,7 +132,7 @@
 <div id="tip"></div>
 <script>
 const $ = id => document.getElementById(id);
-let api, cfg, cells, cell, brush = 0, size = 4, painting = false, current = null, currentIds = null;
+let api, cfg, cells, cell, brush = 0, size = 4, painting = false, current = null, currentIds = null, currentMap = null;
 let searching = false, searchAgain = false, mode = 'area', hit = null;
 
 window.addEventListener('pywebviewready', async () => {
@@ -249,7 +249,7 @@ $('tools').addEventListener('click', e => {
 const MODE_INFO = {
   area: 'Every painted cell counts equally.',
   brushes: 'Every brush counts equally, and a seed must contain them all.',
-  fit: 'Also tries the drawing turned and stretched. The preview turns to line up with it.',
+  fit: 'Like All brushes, but turns and zooms the seed, and stretches the drawing a little, to fit its shape best.',
 };
 $('modeinfo').textContent = MODE_INFO.area;
 $('modes').addEventListener('click', e => {
@@ -305,7 +305,9 @@ function showResults(hits) {
 function fitText(h) {
   const parts = [];
   if (h.degrees) parts.push(`turned ${h.degrees}°`);
-  if (h.sx !== 1 || h.sy !== 1) parts.push(`${h.sx} × ${h.sy}`);
+  if (h.zoom !== 1) parts.push(`zoom ${h.zoom}×`);
+  if (h.kx !== 1) parts.push('wider');
+  if (h.ky !== 1) parts.push('taller');
   return parts.join(' · ') || 'as drawn';
 }
 
@@ -317,7 +319,7 @@ async function showSeed(seed, h = null) {
   $('copy').disabled = false;
   setBusy(1);
   let m;
-  try { m = await api.preview(seed); } finally { setBusy(-1); }
+  try { m = await api.preview(seed, hit ? hit.degrees || 0 : 0, hit ? hit.zoom || 1 : 1); } finally { setBusy(-1); }
   if (current !== seed) return;
   const raw = atob(m.ids), map = $('map');
   map.width = map.height = m.size;
@@ -329,7 +331,10 @@ async function showSeed(seed, h = null) {
     img.data.set([c[0], c[1], c[2], 255], i * 4);
   }
   ctx.putImageData(img, 0, 0);
-  map.style.transform = hit && hit.degrees ? `rotate(${-hit.degrees}deg)` : '';
+  currentMap = m;
+  const pct = m.span / m.frame * 100;
+  Object.assign(map.style, { inset: 'auto', width: pct + '%', height: pct + '%', left: (100 - pct) / 2 + '%',
+    top: (100 - pct) / 2 + '%', transform: hit && hit.degrees ? `rotate(${-hit.degrees}deg)` : '' });
   $('empty').hidden = true;
   drawOverlay();
 }
@@ -344,14 +349,17 @@ $('copy').onclick = () => {
   setTimeout(() => $('copy').textContent = 'Copy seed', 1200);
 };
 
+// Mouse position in the frame, turned back into world blocks, then into the rendered map.
 $('map').addEventListener('mousemove', e => {
   if (!currentIds) return;
-  const r = $('map').getBoundingClientRect(), n = $('map').width;
-  let px = Math.floor((e.clientX - r.left) / r.width * n), pz = Math.floor((e.clientY - r.top) / r.height * n);
-  for (let q = 0; q < (hit && hit.degrees || 0) / 90; q++) [px, pz] = [n - 1 - pz, px];
-  const blocks = cfg.area / n;
+  const r = $('map').parentElement.getBoundingClientRect(), m = currentMap;
+  const dx = ((e.clientX - r.left) / r.width - .5) * m.frame, dz = ((e.clientY - r.top) / r.height - .5) * m.frame;
+  const a = (hit && hit.degrees || 0) * Math.PI / 180;
+  const wx = dx * Math.cos(a) - dz * Math.sin(a), wz = dx * Math.sin(a) + dz * Math.cos(a);
+  const px = Math.floor((wx + m.span / 2) / m.step), pz = Math.floor((wz + m.span / 2) / m.step);
+  if (px < 0 || pz < 0 || px >= m.size || pz >= m.size) return;
   const tip = $('tip');
-  tip.textContent = `${cfg.names[currentIds[pz * n + px]].replaceAll('_', ' ')}  (${px * blocks - cfg.area / 2}, ${pz * blocks - cfg.area / 2})`;
+  tip.textContent = `${cfg.names[currentIds[pz * m.size + px]].replaceAll('_', ' ')}  (${Math.floor(wx)}, ${Math.floor(wz)})`;
   tip.style.display = 'block';
   tip.style.left = e.clientX + 14 + 'px';
   tip.style.top = e.clientY + 14 + 'px';
@@ -360,7 +368,7 @@ $('map').addEventListener('mouseleave', () => $('tip').style.display = 'none');
 
 function describeTarget() {
   const n = +$('target').value;
-  $('targetinfo').textContent = `${(n * cfg.grid * cfg.grid / 1e9).toFixed(1)} GB on disk`;
+  $('targetinfo').textContent = `${(n * cfg.seed_bytes / 1e9).toFixed(1)} GB on disk`;
 }
 $('target').onchange = describeTarget;
 

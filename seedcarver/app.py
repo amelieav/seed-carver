@@ -1,5 +1,6 @@
 """Desktop window: pywebview hosts ui.html and exposes Api to its JavaScript."""
 import base64
+import math
 import shutil
 import threading
 import time
@@ -28,6 +29,7 @@ class Api:
             "names": [core.biome_name(i) or "" for i in range(256)],
             "grid": core.GRID,
             "area": core.AREA,
+            "seed_bytes": bank.SEED_BYTES,
         }
 
     def status(self):
@@ -38,13 +40,13 @@ class Api:
         return {"seeds": seeds, "build": self._build, "error": self._error}
 
     def search(self, drawing, mode="area"):
-        """mode: area, brushes or fit. Fit hits also give how the drawing was turned and stretched, and the drawing
-        stretched (not turned), to lay over the preview turned back by `degrees`."""
+        """mode: area, brushes or fit. Fit hits also give how the preview is turned and zoomed and the drawing
+        stretched to fit, and the stretched drawing to lay over that preview."""
         start = time.perf_counter()
         if mode == "fit":
-            hits = [{"seed": s, "match": m, "degrees": d, "sx": sx, "sy": sy,
-                     "drawing": bank.transform(drawing, 0, sx, sy)}
-                    for s, m, d, sx, sy in bank.search_fit(BANK, drawing)]
+            hits = [{"seed": s, "match": m, "degrees": d, "zoom": z, "kx": kx, "ky": ky,
+                     "drawing": bank.transform(drawing, 0, kx, ky)}
+                    for s, m, d, z, kx, ky in bank.search_fit(BANK, drawing)]
         else:
             hits = [{"seed": s, "match": m} for s, m in bank.search(BANK, drawing, all_brushes=mode == "brushes")]
         return {
@@ -53,18 +55,22 @@ class Api:
             "searched": bank.count(BANK),
         }
 
-    def preview(self, seed):
-        """Biome ids for the bank's square around spawn, as base64, rendered in parallel bands."""
-        band = max(MAP_SIZE // bank.THREADS, 1)
-        rows = range(0, MAP_SIZE, band)
+    def preview(self, seed, degrees=0, zoom=1):
+        """Biome ids around spawn, as base64, rendered in parallel bands. The drawing's frame is AREA / zoom blocks
+        across, turned by degrees; the square rendered (span blocks across, step blocks per pixel) covers it."""
+        frame = core.AREA / zoom
+        a = math.radians(degrees)
+        step = max(1, round(MAP_STEP / zoom))
+        size = math.ceil(frame * (abs(math.cos(a)) + abs(math.sin(a))) / step - 1e-9)
+        span = size * step
+        band = max(size // bank.THREADS, 1)
 
         def render(row):
-            return core.biome_map(seed, -core.AREA // 2, -core.AREA // 2 + row * MAP_STEP, MAP_STEP, MAP_SIZE,
-                                  min(band, MAP_SIZE - row))
+            return core.biome_map(seed, -span // 2, -span // 2 + row * step, step, size, min(band, size - row))
 
         with ThreadPoolExecutor(bank.THREADS) as pool:
-            ids = b"".join(pool.map(render, rows))
-        return {"size": MAP_SIZE, "ids": base64.b64encode(ids).decode()}
+            ids = b"".join(pool.map(render, range(0, size, band)))
+        return {"size": size, "step": step, "span": span, "frame": frame, "ids": base64.b64encode(ids).decode()}
 
     def start_build(self, target):
         if self._build:
@@ -75,7 +81,7 @@ class Api:
         except ValueError as e:
             self._error = str(e)
             return
-        needed = max(target - have, 0) * core.CELLS
+        needed = max(target - have, 0) * bank.SEED_BYTES
         free = shutil.disk_usage(BANK.parent).free
         if needed > free:
             self._error = f"Not enough disk space: needs {needed / 1e9:.1f} GB, {free / 1e9:.1f} GB free."
