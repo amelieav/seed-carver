@@ -1,6 +1,8 @@
+<img width="1409" height="836" alt="Screenshot 2026-11-04 151150" src="https://github.com/user-attachments/assets/cac55c80-885e-4132-b3aa-618bf364ba04" />
+
 # Seed Carver
 
-Paint biomes on a grid, get the Minecraft Java seeds that match best, preview them. Fully offline.
+Paint your ideal biome layout, and get matched with the seed closest to it.
 
 Biomes come from [cubiomes](https://github.com/Cubitect/cubiomes), using its newest model (1.21.4). The app searches a local bank of seeds, each stored as a surface biome map of the 1 km square around 0,0, with one 64×64 grid cell per chunk.
 
@@ -8,7 +10,7 @@ Biomes come from [cubiomes](https://github.com/Cubitect/cubiomes), using its new
 
 From the Releases page, get `SeedCarver-windows.zip` (exe plus 1M seeds), unzip it, run `SeedCarver.exe`. Needs the WebView2 runtime, which Windows 11 includes. The exe is unsigned, so SmartScreen may warn.
 
-The app keeps `seeds.bank` beside the exe. Grow it with **Build** in the sidebar.
+The app keeps `seeds.bank` beside the exe. Grow it with **Build** in the sidebar - the mode seeds in the bank the higher the chance of a good match with your custom drawing.
 
 ## Build from source
 
@@ -56,17 +58,8 @@ Start with 1M. Rare biomes improve most with more seeds, and shapes the terrain 
 **Does building add to `seeds.bank`?**
 Yes. Build appends after the last complete seed, so growing 1M to 5M generates only the 4M new seeds. Stopping or crashing loses at most the unfinished record, and the next build resumes there.
 
-**What format is the bank?**
-Raw binary: a 16-byte header, then 4,096 bytes per seed. Seeds run sequentially from 0, so the seed is the record's position and isn't stored. Each byte is a cubiomes biome ID, in rows north to south, each west to east:
-
-```
-offset = 16 + seed * 4096 + row * 64 + column
-```
-
-Raw IDs are kept rather than groups, so groups and scoring can change without rebuilding.
-
 **What area does a match look at?**
-A fixed square, x and z from -512 to +512, not a radius. It is split into 64×64 cells lined up with chunks, and each cell is one surface biome sample at its centre. Your drawing is only compared at that position, never shifted or rotated.
+A fixed square, x and z from -512 to +512. It is split into 64×64 cells lined up with chunks, and each cell is one surface biome sample at its centre. Your drawing is only compared at that position, never shifted or rotated.
 
 World spawn is near 0,0 but not exactly on it, and may be some way off.
 
