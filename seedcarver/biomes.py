@@ -45,5 +45,13 @@ def _cost_row(name):
 
 
 COST = [_cost_row(g) for g in NAMES]
+# Index classes: bit g for group g's biomes, bit 15 for shores. Cost depends only on painted group and class.
+SHORE = 15
+CLASS_BIT = [0] * 256
+for _g, _m in enumerate(MEMBERS):
+    for _i in _m:
+        CLASS_BIT[_i] = 1 << _g
+for _b in EDGES:
+    CLASS_BIT[_ids[_b]] = CLASS_BIT[_ids[_b]] or 1 << SHORE
 _palette = core.palette()
 COLORS = ["#%02x%02x%02x" % _palette[m[0]] for m in MEMBERS]
