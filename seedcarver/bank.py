@@ -5,6 +5,7 @@ import threading
 from array import array
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from fractions import Fraction
 
 from . import biomes, core
 
@@ -56,7 +57,7 @@ def build(path, target, progress=None, stop=None, threads=THREADS):
     return done
 
 
-INDEX_MAGIC = b"SEEDCARVERIDX2\n\0"
+INDEX_MAGIC = b"SEEDCARVERIDX3\n\0"
 INDEX_RECORD = core.INDEX_RECORD
 _index_lock = threading.Lock()
 
@@ -102,25 +103,59 @@ def index(path, total, threads=THREADS):
                 g.close()
 
 
-def _bound(cells, groups, weights, need):
+LEVELS = (16, 4, 1)  # region sides in tiles, coarse to fine: whole map, 16 regions, tiles; as core.Caps sums them
+
+
+def _hit_near(g):
     rep = {}
     for i, bit in enumerate(biomes.CLASS_BIT):
         rep.setdefault(bit, i)
     rep.pop(0, None)
-    per_tile = Counter()
-    weight = {}
-    for cell, g, w in zip(cells, groups, weights):
-        row, col = divmod(cell, core.GRID)
-        per_tile[(row // core.TILE) * (core.GRID // core.TILE) + col // core.TILE, g] += 1
-        weight[g] = w
-    entries = []
-    for (tile, g), p in per_tile.items():
-        cost = biomes.COST[g]
-        hit = sum(bit for bit, i in rep.items() if cost[i] == biomes.HIT)
-        near = sum(bit for bit, i in rep.items() if cost[i] == biomes.NEAR)
-        level = [cost[rep[1 << c]] if 1 << c in rep else biomes.MISS for c in range(16)]
-        entries.append((tile, hit, near, level, p, weight[g]))
-    return core.Bound(entries, (biomes.HIT, biomes.NEAR, biomes.MISS), need)
+    hit = sum(bit for bit, i in rep.items() if biomes.COST[g][i] == biomes.HIT)
+    near = sum(bit for bit, i in rep.items() if biomes.COST[g][i] == biomes.NEAR)
+    return hit, near
+
+
+def _bounds(cells, groups, weights, gi):
+    across = core.GRID // core.TILE
+    weight = dict(zip(groups, weights))
+    out = []
+    for side in LEVELS:
+        per = across // side
+        p = Counter()
+        for cell, g in zip(cells, groups):
+            row, col = divmod(cell, core.GRID)
+            p[(row // core.TILE // side) * per + col // core.TILE // side, g] += 1
+        entries = [(r, gi[g], n, weight[g]) for (r, g), n in p.items()]
+        out.append(core.Bound(entries, per * per, side == 1, (biomes.HIT, biomes.NEAR, biomes.MISS)))
+    return out
+
+
+class _Variant:
+    def __init__(self, drawing, all_brushes, info=None):
+        painted = [i for i, g in enumerate(drawing) if g >= 0]
+        self.drawing, self.info = drawing, info
+        cells = array("H", painted)
+        groups = array("H", (drawing[i] for i in painted))
+        used = Counter(groups)
+        # 2**24 per brush keeps the total inside uint32: MISS * 2**24 * 15 brushes < 2**32
+        weights = array("I", (2**24 // used[g] if all_brushes else 1 for g in groups))
+        id_mask = array("I", [0]) * 256
+        for g in used:
+            for i in biomes.MEMBERS[g]:
+                id_mask[i] |= 1 << g
+        need = sum(1 << g for g in used) if all_brushes else 0
+        self.used = sorted(used)
+        self.cells, self.groups, self.weights, self.all_brushes = cells, groups, weights, all_brushes
+        self.scorer = core.Scorer(b"".join(biomes.COST), cells, groups, weights, need, id_mask)
+        self.worst = biomes.MISS * sum(weights)
+
+
+def _check(drawing):
+    if len(drawing) != core.CELLS:
+        raise ValueError(f"drawing must have {core.CELLS} cells")
+    if all(g < 0 for g in drawing):
+        raise ValueError("drawing is empty")
 
 
 def search(path, drawing, k=10, threads=THREADS, all_brushes=False):
@@ -128,43 +163,74 @@ def search(path, drawing, k=10, threads=THREADS, all_brushes=False):
 
     By default every painted cell counts equally. With all_brushes every brush counts equally, however
     many cells it covers, and a seed must contain each brush somewhere in the area.
-
-    A per-tile index gives each seed a lower bound on its score; only seeds whose bound can still beat
-    the current top k are read from the bank and scored exactly.
     """
-    if len(drawing) != core.CELLS:
-        raise ValueError(f"drawing must have {core.CELLS} cells")
-    painted = [i for i, g in enumerate(drawing) if g >= 0]
-    if not painted:
-        raise ValueError("drawing is empty")
+    _check(drawing)
+    return [(seed, match) for seed, match, _ in _search(path, [_Variant(drawing, all_brushes)], k, threads)]
+
+
+ROTATIONS = (0, 90, 180, 270)
+SCALES = (0.8, 1, 1.25)
+
+
+def transform(drawing, degrees=0, sx=1, sy=1):
+    """The drawing resized by sx across and sy down, then turned clockwise by a multiple of 90 degrees,
+    both about the grid's centre."""
+    half = core.GRID / 2
+    out = [-1] * core.CELLS
+    for r in range(core.GRID):
+        for c in range(core.GRID):
+            x, y = c + 0.5 - half, r + 0.5 - half
+            for _ in range(degrees // 90):
+                x, y = y, -x
+            sr, sc = int(y / sy + half + 1) - 1, int(x / sx + half + 1) - 1
+            if 0 <= sr < core.GRID and 0 <= sc < core.GRID:
+                out[r * core.GRID + c] = drawing[sr * core.GRID + sc]
+    return out
+
+
+def search_fit(path, drawing, k=10, threads=THREADS):
+    """Best k seeds for the drawing at any of ROTATIONS, resized across and down by any of SCALES, each seed once
+    at its best fit. Returns [(seed, match 0-1, degrees, sx, sy)]."""
+    _check(drawing)
+    variants, seen = [], set()
+    for sx in SCALES:
+        for sy in SCALES:
+            for degrees in ROTATIONS:
+                moved = transform(drawing, degrees, sx, sy)
+                if tuple(moved) not in seen and any(g >= 0 for g in moved):
+                    seen.add(tuple(moved))
+                    variants.append(_Variant(moved, False, (degrees, sx, sy)))
+    return [(seed, match, *v.info) for seed, match, v in _search(path, variants, k, threads)]
+
+
+def _search(path, variants, k, threads):
+    """Best k distinct seeds over all variants by match. A per-tile index gives each seed a lower bound on its
+    score; only seeds whose bound can still beat the current top k are read from the bank and scored exactly."""
     total = count(path)
     index(path, total, threads)
-    cells = array("H", painted)
-    groups = array("H", (drawing[i] for i in painted))
-    cost = b"".join(biomes.COST)
-    used = Counter(groups)
-    # 2**24 per brush keeps the total inside uint32: MISS * 2**24 * 15 brushes < 2**32
-    weights = array("I", (2**24 // used[g] if all_brushes else 1 for g in groups))
-    id_mask = array("I", [0]) * 256
-    for g in used:
-        for i in biomes.MEMBERS[g]:
-            id_mask[i] |= 1 << g
-    need = sum(1 << g for g in used) if all_brushes else 0
-    bound = _bound(cells, groups, weights, need)
-    scorer = core.Scorer(cost, cells, groups, weights, need, id_mask)
     idx_header = len(_index_header())
-    best = []
-    limit = [2**32 - 1]
-    cutoff = [(2**32, 0)]
+    used = sorted({g for v in variants for g in v.used})
+    gi = {g: i for i, g in enumerate(used)}
+    ng = len(used)
+    hit, near = zip(*map(_hit_near, used))
+    for v in variants:
+        v.bounds = _bounds(v.cells, v.groups, v.weights, gi)
+        v.need = sum(1 << gi[g] for g in v.used) if v.all_brushes else 0
+    best = {}
+    cutoff = [(Fraction(2), 0)]
     lock = threading.Lock()
 
-    def merge(hits):
+    def merge(v, hits):
         with lock:
-            best.extend(hits)
-            best.sort()
-            del best[k:]
-            if len(best) == k:
-                limit[0], cutoff[0] = best[-1][0], best[-1]
+            for score, seed in hits:
+                key = (Fraction(score, v.worst), seed)
+                if seed not in best or key < best[seed][0]:
+                    best[seed] = (key, v)
+            top = sorted(best.values(), key=lambda e: e[0])[:k]
+            best.clear()
+            best.update((e[0][1], e) for e in top)
+            if len(top) == k:
+                cutoff[0] = top[-1][0]
 
     local = threading.local()
     files = []
@@ -175,31 +241,41 @@ def search(path, drawing, k=10, threads=THREADS, all_brushes=False):
             local.idx = open(f"{path}.idx", "rb")
             files.extend((local.f, local.idx))
             local.tiles = bytearray(SCAN_BLOCK * INDEX_RECORD)
-            local.keys = (ctypes.c_uint64 * SCAN_BLOCK)()
             local.recs = bytearray(BATCH * core.CELLS)
             local.chunk = bytearray(SCAN_BLOCK * core.CELLS)
+            local.filter = core.Filter(SCAN_BLOCK, hit, near, [v.bounds for v in variants], [v.need for v in variants])
         n = min(SCAN_BLOCK, total - start)
         local.idx.seek(idx_header + start * INDEX_RECORD)
         local.idx.readinto(local.tiles)
-        found = bound(local.tiles, n, limit[0], local.keys)
-        if found > DENSE:
-            local.f.seek(HEADER + start * core.CELLS)
-            local.f.readinto(local.chunk)
-            merge([(s, start + i) for s, i in scorer(local.chunk, n, k)])
-            return
+        ratio = cutoff[0][0]
+        kept = local.filter(local.tiles, n, [min(int(ratio * v.worst), 2**32 - 1) for v in variants])
+        chunk_read = False
         view = memoryview(local.recs)
-        for first in range(0, found, BATCH):
-            seeds = []
-            for key in local.keys[first:min(first + BATCH, found)]:
-                seed = start + (key & 0xFFFFFFFF)
-                if (key >> 32, seed) > cutoff[0]:
+        for v, keys in zip(variants, kept):
+            found = len(keys)
+            if found > DENSE:
+                if not chunk_read:
+                    local.f.seek(HEADER + start * core.CELLS)
+                    local.f.readinto(local.chunk)
+                    chunk_read = True
+                merge(v, [(s, start + i) for s, i in v.scorer(local.chunk, n, k)])
+                continue
+            for first in range(0, found, BATCH):
+                seeds = []
+                for key in keys[first:first + BATCH]:
+                    seed = start + (key & 0xFFFFFFFF)
+                    if (Fraction(key >> 32, v.worst), seed) > cutoff[0]:
+                        break
+                    if chunk_read:
+                        view[len(seeds) * core.CELLS:(len(seeds) + 1) * core.CELLS] = \
+                            local.chunk[(seed - start) * core.CELLS:(seed - start + 1) * core.CELLS]
+                    else:
+                        local.f.seek(HEADER + seed * core.CELLS)
+                        local.f.readinto(view[len(seeds) * core.CELLS:(len(seeds) + 1) * core.CELLS])
+                    seeds.append(seed)
+                if not seeds:
                     break
-                local.f.seek(HEADER + seed * core.CELLS)
-                local.f.readinto(view[len(seeds) * core.CELLS:(len(seeds) + 1) * core.CELLS])
-                seeds.append(seed)
-            if not seeds:
-                break
-            merge([(s, seeds[i]) for s, i in scorer(local.recs, len(seeds), k)])
+                merge(v, [(s, seeds[i]) for s, i in v.scorer(local.recs, len(seeds), k)])
 
     try:
         with ThreadPoolExecutor(threads) as pool:
@@ -207,5 +283,4 @@ def search(path, drawing, k=10, threads=THREADS, all_brushes=False):
     finally:
         for f in files:
             f.close()
-    worst = biomes.MISS * sum(weights)
-    return [(seed, 1 - score / worst) for score, seed in best]
+    return [(seed, 1 - float(ratio), v) for (ratio, seed), v in sorted(best.values(), key=lambda e: e[0])]

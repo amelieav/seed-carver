@@ -80,14 +80,18 @@ API int sc_scan(const uint8_t *data, int count, const uint8_t *cost, const uint1
 #define TILE 4
 #define TILES ((GRID / TILE) * (GRID / TILE))
 
-// Per record: TILES class masks (the OR of class_bit over each 4x4 tile), then TILES bytes giving each tile's
-// commonest class (low 4 bits) and how many of its 16 cells hold it, minus one (high 4 bits).
+#define RECORD (TILES * 3 + 32)
+
+// Per record: TILES class masks (the OR of class_bit over each 4x4 tile); TILES bytes giving each tile's commonest
+// class (low 4 bits) and how many of its 16 cells hold it, minus one (high 4 bits); then per class a uint16 upper
+// bound on its cells in the whole map: the commonest class's count where it is commonest, else 16 minus that.
 API void sc_tiles(const uint8_t *data, int count, const uint16_t *class_bit, uint8_t *out)
 {
     const int side = GRID / TILE;
-    for (int i = 0; i < count; i++, data += CELLS, out += TILES * 3) {
-        uint16_t *mask = (uint16_t *)out;
+    for (int i = 0; i < count; i++, data += CELLS, out += RECORD) {
+        uint16_t *mask = (uint16_t *)out, *most = (uint16_t *)(out + TILES * 3);
         uint8_t *dom = out + TILES * 2;
+        memset(most, 0, 32);
         for (int t = 0; t < TILES; t++) {
             int n[16] = {0}, best = 0;
             uint16_t m = 0;
@@ -102,7 +106,87 @@ API void sc_tiles(const uint8_t *data, int count, const uint16_t *class_bit, uin
                     best = k;
             mask[t] = m;
             dom[t] = (uint8_t)(best | (n[best] ? n[best] - 1 : 0) << 4);
+            for (int k = 0; k < 16; k++)
+                if (m >> k & 1)
+                    most[k] += k == best ? n[best] : TILE * TILE - n[best];
         }
+    }
+}
+
+// Per record and group: upper bounds on the map's cells that could hit, and that could hit or be near (uint16 pair).
+API void sc_whole(const uint8_t *tiles, int count, int ng, const uint16_t *hit, const uint16_t *near, uint16_t *out)
+{
+    for (int i = 0; i < count; i++, tiles += RECORD) {
+        const uint16_t *most = (const uint16_t *)(tiles + TILES * 3);
+        for (int g = 0; g < ng; g++, out += 2) {
+            uint32_t a = 0, b = 0;
+            for (int k = 0; k < 16; k++) {
+                a += hit[g] >> k & 1 ? most[k] : 0;
+                b += (hit[g] | near[g]) >> k & 1 ? most[k] : 0;
+            }
+            out[0] = (uint16_t)(a < CELLS ? a : CELLS);
+            out[1] = (uint16_t)(b < CELLS ? b : CELLS);
+        }
+    }
+}
+
+static uint8_t cap(uint16_t m, uint16_t d, int c, uint16_t want)
+{
+    uint16_t mw = m & want;
+    return !mw ? 0 : !(d & want) ? (uint8_t)(TILE * TILE - c) : mw & ~d ? TILE * TILE : (uint8_t)c;
+}
+
+// One record's per group and tile upper bounds on cells that could hit, and that could hit or be near (2 bytes).
+static void tile_caps(const uint8_t *rec, int ng, const uint16_t *hit, const uint16_t *near, uint8_t *cp)
+{
+    const uint16_t *mask = (const uint16_t *)rec;
+    const uint8_t *dom = rec + TILES * 2;
+    for (int g = 0; g < ng; g++, cp += TILES * 2)
+        for (int t = 0; t < TILES; t++) {
+            uint16_t d = (uint16_t)(1 << (dom[t] & 15));
+            int c = (dom[t] >> 4) + 1;
+            cp[t * 2] = cap(mask[t], d, c, hit[g]);
+            cp[t * 2 + 1] = cap(mask[t], d, c, hit[g] | near[g]);
+        }
+}
+
+// One record's per group upper bounds over 16 regions of 4x4 tiles (uint16 pairs), from per class bounds: a tile
+// holds at most c cells of its commonest class and 16 - c of any other.
+static void region_caps(const uint8_t *rec, int ng, const uint16_t *hit, const uint16_t *near, uint16_t *rp)
+{
+    const uint16_t *mask = (const uint16_t *)rec;
+    const uint8_t *dom = rec + TILES * 2;
+    uint16_t most[16][16] = {{0}};
+    for (int t = 0; t < TILES; t++) {
+        int r = (t >> 6) * 4 + ((t & 15) >> 2), best = dom[t] & 15, c = (dom[t] >> 4) + 1;
+        for (uint32_t m = mask[t]; m; m &= m - 1) {
+            int k = __builtin_ctz(m);
+            most[r][k] += (uint16_t)(k == best ? c : TILE * TILE - c);
+        }
+    }
+    for (int g = 0; g < ng; g++, rp += 32) {
+        uint16_t good = hit[g] | near[g];
+        for (int r = 0; r < 16; r++) {
+            uint32_t a = 0, b = 0;
+            for (int k = 0; k < 16; k++) {
+                a += hit[g] >> k & 1 ? most[r][k] : 0;
+                b += good >> k & 1 ? most[r][k] : 0;
+            }
+            rp[r * 2] = (uint16_t)(a < 256 ? a : 256);
+            rp[r * 2 + 1] = (uint16_t)(b < 256 ? b : 256);
+        }
+    }
+}
+
+// For the records listed in in (index in the low 32 bits): per group, tile caps (2 bytes per tile) and region caps
+// (uint16 pairs per region). Outputs are laid out by record index, so records not listed are left as they were.
+API void sc_caps(const uint8_t *tiles, const uint64_t *in, int count, int ng, const uint16_t *hit,
+                 const uint16_t *near, uint8_t *caps, uint16_t *regions)
+{
+    for (int k = 0; k < count; k++) {
+        uint32_t i = (uint32_t)in[k];
+        tile_caps(tiles + (size_t)i * RECORD, ng, hit, near, caps + (size_t)i * ng * TILES * 2);
+        region_caps(tiles + (size_t)i * RECORD, ng, hit, near, regions + (size_t)i * ng * 32);
     }
 }
 
@@ -112,46 +196,99 @@ static int cmp_u64(const void *a, const void *b)
     return (x > y) - (x < y);
 }
 
-// Lower bound of each record's score from its tiles. Each of the n entries is one painted group in one tile, with
-// p painted cells of weight w each. level holds 16 bytes per entry, the cost of each class for its group; hit and
-// near are the classes costing lv_hit and lv_near. In a tile whose commonest class covers c cells, at least
-// p - (16 - c) painted cells fall on that class, and the rest cost no less than the best class present.
-// Writes records whose bound <= limit and that hold every class of need as keys bound << 32 | index, sorted.
-API int sc_bound(const uint8_t *tiles, int count, const uint16_t *tile, const uint16_t *hit, const uint16_t *near,
-                 const uint8_t *level, const uint8_t *p, const uint32_t *w, int n, uint32_t lv_hit, uint32_t lv_near,
-                 uint32_t lv_miss, uint32_t need, uint32_t limit, uint64_t *keys)
+// Lower bound of each record's score from caps over nreg regions (uint8 caps when narrow, else uint16).
+// Each of the n entries puts p painted cells of weight w, of group index gi, in one region: they fill the cells
+// that could hit first, then those that could be near, and the rest miss. Records come from in (count of them) or,
+// when in is NULL, are 0..count-1. Records whose bound <= limit, and whose caps show every group index in need,
+// are written as keys bound << 32 | index, sorted if asked. Returns how many.
+API int sc_bound(const void *caps, int narrow, int nreg, int ng, const uint64_t *in, int count, const uint16_t *reg,
+                 const uint8_t *gi, const uint16_t *p, const uint32_t *w, int n, uint32_t lv_hit, uint32_t lv_near,
+                 uint32_t lv_miss, uint32_t need, uint32_t limit, uint64_t *keys, int sort)
 {
     int found = 0;
-    for (int i = 0; i < count; i++, tiles += TILES * 3) {
-        const uint16_t *mask = (const uint16_t *)tiles;
-        const uint8_t *dom = tiles + TILES * 2;
-        if (need) {
-            uint32_t seen = 0;
-            for (int t = 0; t < TILES; t++)
-                seen |= mask[t];
-            if ((seen & need) != need)
+    const int stride = ng * nreg * 2;
+    for (int k = 0; k < count; k++) {
+        uint32_t i = in ? (uint32_t)in[k] : (uint32_t)k;
+        const uint8_t *c8 = (const uint8_t *)caps + (size_t)i * stride;
+        const uint16_t *c16 = (const uint16_t *)caps + (size_t)i * stride;
+        int ok = 1;
+        for (int g = 0; need && g < ng && ok; g++) {
+            if (!(need >> g & 1))
                 continue;
+            uint32_t any = 0;
+            for (int r = 0; r < nreg; r++)
+                any += narrow ? c8[(g * nreg + r) * 2] : c16[(g * nreg + r) * 2];
+            ok = any > 0;
         }
+        if (!ok)
+            continue;
         uint32_t s = 0;
         for (int j = 0; j < n && s <= limit; j++) {
-            uint16_t m = mask[tile[j]];
-            uint32_t best = m & hit[j] ? lv_hit : m & near[j] ? lv_near : lv_miss;
-            if (!m) {
-                s += lv_miss * p[j] * w[j];
-                continue;
-            }
-            int d = dom[tile[j]] & 15, c = (dom[tile[j]] >> 4) + 1, x = p[j] - (TILE * TILE - c);
-            uint32_t ld = level[j * 16 + d];
-            if (x > 0)
-                s += (x * ld + (p[j] - x) * best) * w[j];
-            else
-                s += p[j] * best * w[j];
+            int at = (gi[j] * nreg + reg[j]) * 2;
+            uint32_t a = narrow ? c8[at] : c16[at], b = narrow ? c8[at + 1] : c16[at + 1];
+            uint32_t h = p[j] < a ? p[j] : a, nn = p[j] - h < b - a ? p[j] - h : b - a;
+            s += (h * lv_hit + nn * lv_near + (p[j] - h - nn) * lv_miss) * w[j];
         }
         if (s <= limit)
-            keys[found++] = (uint64_t)s << 32 | (uint32_t)i;
+            keys[found++] = (uint64_t)s << 32 | i;
     }
-    qsort(keys, found, sizeof *keys, cmp_u64);
+    if (sort)
+        qsort(keys, found, sizeof *keys, cmp_u64);
     return found;
+}
+
+typedef struct {
+    int n;
+    const uint16_t *reg;
+    const uint8_t *gi;
+    const uint16_t *p;
+    const uint32_t *w;
+} Level;
+
+typedef struct {
+    Level level[3]; // whole map, 16 regions, tiles
+    uint32_t need, limit;
+} Variant;
+
+// For a block of count index records and nv variants of a drawing: the records each variant's bound keeps, coarse
+// to fine, as sorted keys (count per variant in keys) with how many in found. Each level's caps are only computed for
+// records some variant keeps at the level before. whole, regions, caps and mark are scratch sized for count.
+API void sc_filter(const uint8_t *tiles, int count, int ng, const uint16_t *hit, const uint16_t *near,
+                   const uint32_t *lv, uint16_t *whole, uint16_t *regions, uint8_t *caps, uint8_t *mark, int nv, const Variant *vs, uint64_t *keys, int *found)
+{
+    if (count <= 0)
+        return;
+    sc_whole(tiles, count, ng, hit, near, whole);
+    memset(mark, 0, (size_t)count);
+    for (int v = 0; v < nv; v++) {
+        const Level *l = &vs[v].level[0];
+        uint64_t *out = keys + (size_t)v * count;
+        found[v] = sc_bound(whole, 0, 1, ng, NULL, count, l->reg, l->gi, l->p, l->w, l->n, lv[0], lv[1], lv[2],
+                            vs[v].need, vs[v].limit, out, 0);
+        for (int k = 0; k < found[v]; k++)
+            mark[(uint32_t)out[k]] = 1;
+    }
+    for (int i = 0; i < count; i++)
+        if (mark[i])
+            region_caps(tiles + (size_t)i * RECORD, ng, hit, near, regions + (size_t)i * ng * 32);
+    memset(mark, 0, (size_t)count);
+    for (int v = 0; v < nv; v++) {
+        uint64_t *out = keys + (size_t)v * count;
+        const Level *l = &vs[v].level[1];
+        found[v] = sc_bound(regions, 0, 16, ng, out, found[v], l->reg, l->gi, l->p, l->w, l->n, lv[0], lv[1],
+                            lv[2], 0, vs[v].limit, out, 0);
+        for (int k = 0; k < found[v]; k++)
+            mark[(uint32_t)out[k]] = 1;
+    }
+    for (int i = 0; i < count; i++)
+        if (mark[i])
+            tile_caps(tiles + (size_t)i * RECORD, ng, hit, near, caps + (size_t)i * ng * TILES * 2);
+    for (int v = 0; v < nv; v++) {
+        uint64_t *out = keys + (size_t)v * count;
+        const Level *l = &vs[v].level[2];
+        found[v] = sc_bound(caps, 1, TILES, ng, out, found[v], l->reg, l->gi, l->p, l->w, l->n, lv[0], lv[1],
+                            lv[2], 0, vs[v].limit, out, 1);
+    }
 }
 
 API void sc_palette(uint8_t *rgb)

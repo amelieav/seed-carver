@@ -37,11 +37,18 @@ class Api:
             return {"seeds": 0, "build": None, "error": str(e)}
         return {"seeds": seeds, "build": self._build, "error": self._error}
 
-    def search(self, drawing, all_brushes=False):
+    def search(self, drawing, mode="area"):
+        """mode: area, brushes or fit. Fit hits also give how the drawing was turned and stretched, and the drawing
+        stretched (not turned), to lay over the preview turned back by `degrees`."""
         start = time.perf_counter()
-        hits = bank.search(BANK, drawing, all_brushes=all_brushes)
+        if mode == "fit":
+            hits = [{"seed": s, "match": m, "degrees": d, "sx": sx, "sy": sy,
+                     "drawing": bank.transform(drawing, 0, sx, sy)}
+                    for s, m, d, sx, sy in bank.search_fit(BANK, drawing)]
+        else:
+            hits = [{"seed": s, "match": m} for s, m in bank.search(BANK, drawing, all_brushes=mode == "brushes")]
         return {
-            "hits": [{"seed": s, "match": m} for s, m in hits],
+            "hits": hits,
             "seconds": time.perf_counter() - start,
             "searched": bank.count(BANK),
         }

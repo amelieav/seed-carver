@@ -67,7 +67,7 @@ World spawn is near 0,0 but not exactly on it, and may be some way off.
 Each painted cell scores full for the same group, half for a similar group (forest and plains) or a river or beach, and nothing otherwise. Unpainted cells are ignored. The percentage is points earned out of points possible, and the top 10 seeds are shown.
 
 **What do the match modes do?**
-**Area** counts every painted cell equally, so a small brush barely affects the result. **All brushes** counts every brush equally however many cells it covers, and only shows seeds containing each brush somewhere in the area. Use it when a small patch, like cherry in a forest, must be present.
+**Area** counts every painted cell equally, so a small brush barely affects the result. **All brushes** counts every brush equally however many cells it covers, and only shows seeds containing each brush somewhere in the area. Use it when a small patch, like cherry in a forest, must be present. **Best fit** scores like Area, but also tries the drawing turned by 90°, 180° and 270° and stretched to 0.8 or 1.25 of its width and height, each about the centre, and lists each seed at its best fit. Use it when the shape matters more than where it sits. The preview turns to line up with your drawing, and **Show drawing** lays your drawing over it stretched as it was matched.
 
 **How well do painted rivers match?**
 Closely, but rarely exactly. On a 1M bank, top results for a painted line had a river within 16 blocks of 70-79% of its cells, against about 20% for random seeds.
@@ -76,7 +76,7 @@ Closely, but rarely exactly. On a 1M bank, top results for a painted line had a 
 Only for a file named exactly `seeds.bank`, directly beside the exe. Subfolders and other names are ignored.
 
 **What is `seeds.bank.idx`?**
-A search index built from the bank: for each seed, which biome groups appear in each 4×4-cell tile and which is commonest (768 bytes per seed, under a fifth of the bank). A search first scores every seed's best possible match from the index, then reads and scores exactly only the seeds that could still make the top 10, so most of the bank is never read. Results are identical to a full scan. It is created and kept up to date automatically, and rebuilt if the biome groups change. Deleting it is safe.
+A search index built from the bank: for each seed, which biome groups appear in each 4×4-cell tile and which is commonest, plus an upper bound on each group's cells (800 bytes per seed, under a fifth of the bank). A search first works out every seed's best possible match from the index, coarse to fine (whole map, 16 regions, tiles), then reads and scores exactly only the seeds that could still make the top 10, so most of the bank is never read. Results are identical to a full scan. It is created and kept up to date automatically, and rebuilt if the biome groups change. Deleting it is safe.
 
 **Are new seeds searchable while the bank grows?**
 Yes. Every search re-reads the bank size, so it includes all seeds written so far. Results refresh on your next brush stroke and when a build ends.

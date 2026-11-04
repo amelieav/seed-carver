@@ -54,6 +54,7 @@
   #results button[aria-pressed=true] { border-color: var(--accent); background: #2b3a28; }
   #results b { display: block; font-variant-numeric: tabular-nums; }
   #results span { font-size: 12px; color: var(--dim); }
+  #results span + span { display: block; }
   #matchbar { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
   #matchbar h2 { margin: 0; white-space: nowrap; }
   #modes { flex: none; }
@@ -120,6 +121,7 @@
       <div class="row seg" id="modes">
         <button data-mode="area" aria-pressed="true">Area</button>
         <button data-mode="brushes" aria-pressed="false">All brushes</button>
+        <button data-mode="fit" aria-pressed="false">Best fit</button>
       </div>
       <div id="modeinfo" class="small"></div>
     </div>
@@ -131,7 +133,7 @@
 <script>
 const $ = id => document.getElementById(id);
 let api, cfg, cells, cell, brush = 0, size = 4, painting = false, current = null, currentIds = null;
-let searching = false, searchAgain = false, allBrushes = false;
+let searching = false, searchAgain = false, mode = 'area', hit = null;
 
 window.addEventListener('pywebviewready', async () => {
   api = window.pywebview.api;
@@ -160,10 +162,10 @@ function buildBrushes() {
   add('Eraser (any biome)', null, -1);
 }
 
-function fillCells(ctx, alpha) {
+function fillCells(ctx, alpha, from = cells) {
   ctx.clearRect(0, 0, 512, 512);
   ctx.globalAlpha = alpha;
-  cells.forEach((g, i) => {
+  from.forEach((g, i) => {
     if (g < 0) return;
     ctx.fillStyle = cfg.groups[g].color;
     ctx.fillRect((i % cfg.grid) * cell, Math.floor(i / cfg.grid) * cell, cell, cell);
@@ -200,7 +202,7 @@ function crosshair(ctx) {
 function drawOverlay() {
   const ctx = $('overlay').getContext('2d');
   ctx.clearRect(0, 0, 512, 512);
-  if ($('showOverlay').checked) fillCells(ctx, .55);
+  if ($('showOverlay').checked) fillCells(ctx, .55, hit && hit.drawing || cells);
   if (current !== null) crosshair(ctx);
 }
 
@@ -247,11 +249,12 @@ $('tools').addEventListener('click', e => {
 const MODE_INFO = {
   area: 'Every painted cell counts equally.',
   brushes: 'Every brush counts equally, and a seed must contain them all.',
+  fit: 'Also tries the drawing turned and stretched. The preview turns to line up with it.',
 };
 $('modeinfo').textContent = MODE_INFO.area;
 $('modes').addEventListener('click', e => {
   if (!e.target.dataset.mode) return;
-  allBrushes = e.target.dataset.mode === 'brushes';
+  mode = e.target.dataset.mode;
   [...$('modes').children].forEach(x => x.setAttribute('aria-pressed', x === e.target));
   $('modeinfo').textContent = MODE_INFO[e.target.dataset.mode];
   runSearch();
@@ -269,7 +272,7 @@ async function runSearch() {
   searching = true;
   setBusy(1);
   try {
-    const r = await api.search(cells, allBrushes);
+    const r = await api.search(cells, mode);
     if (!r.hits.length) {
       $('summary').textContent = r.searched ? `None of ${r.searched.toLocaleString()} seeds contains every brush. Try Area, or build more seeds.` : 'The seed bank is empty. Build one in the sidebar first.';
       $('results').textContent = '';
@@ -291,15 +294,24 @@ function showResults(hits) {
   hits.forEach((h, i) => {
     const b = document.createElement('button');
     b.dataset.seed = h.seed;
-    b.innerHTML = `<b>${h.seed}</b><span>${(h.match * 100).toFixed(1)}% match</span>`;
-    b.onclick = () => showSeed(h.seed);
+    const fit = h.degrees === undefined ? '' : `<span class="small">${fitText(h)}</span>`;
+    b.innerHTML = `<b>${h.seed}</b><span>${(h.match * 100).toFixed(1)}% match</span>${fit}`;
+    b.onclick = () => showSeed(h.seed, h);
     $('results').append(b);
   });
-  showSeed(hits[0].seed);
+  showSeed(hits[0].seed, hits[0]);
 }
 
-async function showSeed(seed) {
+function fitText(h) {
+  const parts = [];
+  if (h.degrees) parts.push(`turned ${h.degrees}°`);
+  if (h.sx !== 1 || h.sy !== 1) parts.push(`${h.sx} × ${h.sy}`);
+  return parts.join(' · ') || 'as drawn';
+}
+
+async function showSeed(seed, h = null) {
   current = seed;
+  hit = h;
   [...$('results').children].forEach(x => x.setAttribute('aria-pressed', x.dataset.seed === String(seed)));
   $('maptitle').textContent = `Seed ${seed}`;
   $('copy').disabled = false;
@@ -317,6 +329,7 @@ async function showSeed(seed) {
     img.data.set([c[0], c[1], c[2], 255], i * 4);
   }
   ctx.putImageData(img, 0, 0);
+  map.style.transform = hit && hit.degrees ? `rotate(${-hit.degrees}deg)` : '';
   $('empty').hidden = true;
   drawOverlay();
 }
@@ -334,7 +347,8 @@ $('copy').onclick = () => {
 $('map').addEventListener('mousemove', e => {
   if (!currentIds) return;
   const r = $('map').getBoundingClientRect(), n = $('map').width;
-  const px = Math.floor((e.clientX - r.left) / r.width * n), pz = Math.floor((e.clientY - r.top) / r.height * n);
+  let px = Math.floor((e.clientX - r.left) / r.width * n), pz = Math.floor((e.clientY - r.top) / r.height * n);
+  for (let q = 0; q < (hit && hit.degrees || 0) / 90; q++) [px, pz] = [n - 1 - pz, px];
   const blocks = cfg.area / n;
   const tip = $('tip');
   tip.textContent = `${cfg.names[currentIds[pz * n + px]].replaceAll('_', ' ')}  (${px * blocks - cfg.area / 2}, ${pz * blocks - cfg.area / 2})`;
