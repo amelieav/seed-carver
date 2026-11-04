@@ -63,10 +63,12 @@ def search(path, drawing, k=10, threads=THREADS):
     cells = array("H", painted)
     cost = b"".join(biomes.COST[drawing[i]] for i in painted)
     local = threading.local()
+    files = []
 
     def scan(start):
         if not hasattr(local, "f"):
             local.f = open(path, "rb")
+            files.append(local.f)
             local.buf = bytearray(SCAN_BLOCK * core.CELLS)
         n = min(SCAN_BLOCK, total - start)
         local.f.seek(HEADER + start * core.CELLS)
@@ -75,5 +77,7 @@ def search(path, drawing, k=10, threads=THREADS):
 
     with ThreadPoolExecutor(threads) as pool:
         hits = heapq.nsmallest(k, (h for block in pool.map(scan, range(0, total, SCAN_BLOCK)) for h in block))
+    for f in files:
+        f.close()
     worst = biomes.MISS * len(painted)
     return [(seed, 1 - score / worst) for score, seed in hits]

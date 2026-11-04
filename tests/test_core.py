@@ -37,8 +37,8 @@ class Bank(unittest.TestCase):
 
     def test_build_resumes_identically(self):
         stop = threading.Event()
-        bank.build(self.path, 3000, stop=stop, progress=lambda d, t: stop.set(), threads=1)
-        self.assertLess(bank.count(self.path), 3000)
+        bank.build(self.path, 10000, stop=stop, progress=lambda d, t: stop.set(), threads=1)
+        self.assertLess(bank.count(self.path), 10000)
         with open(self.path, "ab") as f:
             f.write(b"x" * 100)  # torn write from a crash
         self.assertEqual(bank.build(self.path, 10000, threads=2), 10000)
