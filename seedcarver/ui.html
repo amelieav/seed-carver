@@ -311,6 +311,8 @@ function describeTarget() {
 }
 $('target').onchange = describeTarget;
 
+const formatTime = s => s < 90 ? `${Math.ceil(s)} s` : s < 5400 ? `${Math.ceil(s / 60)} min` : `${(s / 3600).toFixed(1)} h`;
+
 let buildingLast = false;
 async function poll() {
   const s = await api.status();
