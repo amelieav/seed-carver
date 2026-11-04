@@ -13,11 +13,13 @@ SOURCES = ["biomenoise", "biomes", "noise", "util", "generator", "layers"]
 def compile_core():
     if not (VENDOR / "biomenoise.c").exists():
         subprocess.check_call(["git", "submodule", "update", "--init"], cwd=ROOT)
+    sources = [ROOT / "core" / "seedcarver.c"] + [VENDOR / f"{s}.c" for s in SOURCES]
+    # A running app or bank build locks the library, so only relink when it is out of date.
+    if LIB.exists() and LIB.stat().st_mtime > max(s.stat().st_mtime for s in sources):
+        return
     link = ["-static"] if sys.platform == "win32" else ["-fPIC"]
     subprocess.check_call(
-        ["gcc", "-O3", "-fwrapv", "-shared", *link, f"-I{VENDOR}", str(ROOT / "core" / "seedcarver.c")]
-        + [str(VENDOR / f"{s}.c") for s in SOURCES]
-        + ["-lm", "-o", str(LIB)]
+        ["gcc", "-O3", "-fwrapv", "-shared", *link, f"-I{VENDOR}", *map(str, sources), "-lm", "-o", str(LIB)]
     )
 
 
