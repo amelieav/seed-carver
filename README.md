@@ -51,11 +51,30 @@ Best match by bank size:
 
 More seeds help slowly, so 10M is a good stopping point. Rare biomes and shapes the terrain can't make stay low at any size.
 
-## Matching
+## FAQ
 
-A cell scores full for the same group, half for a similar group (forest and plains) or a river or beach, and nothing otherwise. Unpainted cells are ignored. Each bank cell is one sample per 256 blocks, so use the preview to judge small features.
+**Does building add to `seeds.bank`?**
+Yes. Build appends after the last complete seed, so growing 1M to 10M generates only the 9M new seeds. Stopping or crashing loses at most the unfinished record, and the next build resumes there.
 
-Seeds are sequential from 0. Neighbouring seeds share no more biomes than random pairs (5.1% of cells either way).
+**What format is the bank?**
+Raw binary: a 16-byte header, then 256 bytes per seed. Seeds run sequentially from 0, so the seed is the record's position and isn't stored. Each byte is a cubiomes biome ID, in rows north to south, each west to east:
+
+```
+offset = 16 + seed * 256 + row * 16 + column
+```
+
+Raw IDs are kept rather than groups, so groups and scoring can change without rebuilding.
+
+**What area does a match look at?**
+A fixed square, x and z from -2048 to +2048, not a radius. It is split into 16×16 cells of 256 blocks, and each cell is one surface biome sample at its centre. Your drawing is only compared at that position, never shifted or rotated. Features smaller than a cell can be missed, so judge them in the preview.
+
+World spawn is near 0,0 but not exactly on it, and may be some way off.
+
+**How is a match scored?**
+Each painted cell scores full for the same group, half for a similar group (forest and plains) or a river or beach, and nothing otherwise. Unpainted cells are ignored. The percentage is points earned out of points possible, and the top 10 seeds are shown.
+
+**Are sequential seeds less varied than random ones?**
+No. Neighbouring seeds share no more biomes than random pairs (5.1% of cells either way).
 
 ## License
 
