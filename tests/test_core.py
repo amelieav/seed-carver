@@ -11,6 +11,23 @@ from collections import Counter
 from seedcarver import bank, biomes, core
 
 
+def level_bounds(tiles, count, cells, groups, weights, used, all_brushes):
+    """Each level's bound for every record, computed on its own."""
+    order = sorted(used)
+    gi = {g: i for i, g in enumerate(order)}
+    hit, near = zip(*map(bank._hit_near, order))
+    caps = core.Caps(count, hit, near)
+    caps.fill_whole(tiles, count)
+    caps.fill(tiles, (ctypes.c_uint64 * count)(*range(count)), count)
+    need = (1 << len(order)) - 1 if all_brushes else 0
+    out = []
+    for buf, b in zip([caps.whole, caps.regions, caps.tiles], bank._bounds(cells, groups, weights, gi)):
+        keys = (ctypes.c_uint64 * count)()
+        found = b(buf, len(order), None, count, need, 2**32 - 1, keys, 0)
+        out.append({key & 0xFFFFFFFF: key >> 32 for key in keys[:found]})
+    return out
+
+
 class Core(unittest.TestCase):
     def test_known_seed(self):
         # cubiomes' documented example: seed 262 has mushroom fields at (0, 0)
@@ -131,11 +148,9 @@ class Bank(unittest.TestCase):
                 need = sum(1 << g for g in used) if all_brushes else 0
                 want = core.scan(buf, 3000, cost, cells, groups, weights, need, id_mask, 10)
                 exact = dict((i, sc) for sc, i in core.scan(buf, 3000, cost, cells, groups, weights, need, id_mask, 3000))
-                keys = (ctypes.c_uint64 * 3000)()
-                found = bank._bound(cells, groups, weights, need)(tiles, 3000, 2**32 - 1, keys)
-                bounds = {key & 0xFFFFFFFF: key >> 32 for key in keys[:found]}
-                self.assertEqual(set(bounds), set(exact))
-                self.assertTrue(all(bounds[i] <= exact[i] for i in exact))
+                for level, b in zip(bank.LEVELS, level_bounds(tiles, 3000, cells, groups, weights, used, all_brushes)):
+                    self.assertEqual(set(b), set(exact), level)
+                    self.assertTrue(all(b[i] <= exact[i] for i in exact), level)
                 worst = biomes.MISS * sum(weights)
                 self.assertEqual(bank.search(self.path, drawing, all_brushes=all_brushes),
                                  [(i, 1 - s / worst) for s, i in want])
@@ -150,6 +165,39 @@ class Bank(unittest.TestCase):
         bank.index(self.path, 300)
         with open(self.path + ".idx", "rb") as f:
             self.assertEqual(f.read(), grown)
+
+    def test_transform(self):
+        drawing = list(range(core.CELLS))
+        self.assertEqual(bank.transform(drawing), drawing)
+        turned = drawing
+        for _ in range(4):
+            turned = bank.transform(turned, 90)
+        self.assertEqual(turned, drawing)
+        self.assertEqual(bank.transform(drawing, 90)[core.GRID - 1], 0)
+        self.assertEqual(bank.transform(drawing, 0, 2, 2)[0], drawing[16 * core.GRID + 16])
+        self.assertEqual(bank.transform(drawing, 0, 2, 1)[0], drawing[16])
+        self.assertEqual(bank.transform(drawing, 90, 2, 1), bank.transform(bank.transform(drawing, 0, 2, 1), 90))
+
+    def test_fit_finds_a_turned_seed_and_matches_a_full_scan(self):
+        bank.build(self.path, 1500)
+        buf = bytearray(1500 * core.CELLS)
+        with open(self.path, "rb") as f:
+            f.seek(bank.HEADER)
+            f.readinto(buf)
+        to_group = {i: g for g, m in enumerate(biomes.MEMBERS) for i in m}
+        seed = 321
+        drawing = bank.transform([to_group.get(b, -1) for b in buf[seed * core.CELLS:(seed + 1) * core.CELLS]], 90)
+        hits = bank.search_fit(self.path, drawing)
+        self.assertEqual(hits[0], (seed, 1.0, 270, 1, 1))
+        self.assertEqual(len({h[0] for h in hits}), 10)
+        want = {}
+        for sx in bank.SCALES:
+            for sy in bank.SCALES:
+                for degrees in bank.ROTATIONS:
+                    for s, m in bank.search(self.path, bank.transform(drawing, degrees, sx, sy), k=1500):
+                        want[s] = max(want.get(s, 0), m)
+        top = sorted(want.items(), key=lambda e: (-e[1], e[0]))[:10]
+        self.assertEqual([(h[0], h[1]) for h in hits], top)
 
     def test_search_rejects_empty_drawing(self):
         bank.build(self.path, 10)
