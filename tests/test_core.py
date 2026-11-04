@@ -1,4 +1,5 @@
 """Run with `python -m unittest` after `python build.py`."""
+import base64
 import os
 import tempfile
 import threading
@@ -27,6 +28,14 @@ class Core(unittest.TestCase):
         # the bank skips the +-16 block shift noise, so only near-total agreement is expected
         same = sum(a == b for a, b in zip(buf, full))
         self.assertGreater(same, 230)
+
+
+class App(unittest.TestCase):
+    def test_preview_bands_join_into_the_full_map(self):
+        from seedcarver.app import MAP_SIZE, MAP_STEP, Api
+        got = base64.b64decode(Api().preview(5)["ids"])
+        half = core.AREA // 2
+        self.assertEqual(got, core.biome_map(5, -half, -half, MAP_STEP, MAP_SIZE, MAP_SIZE))
 
 
 class Bank(unittest.TestCase):

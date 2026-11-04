@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Seed Carver</title>
+<style>
+  :root {
+    --bg: #15171a; --panel: #1e2125; --line: #33383e; --text: #e8e6e1; --dim: #9aa0a6;
+    --accent: #7cc36a; --accent-ink: #10210c; --danger: #e5786d;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 "Segoe UI", system-ui, sans-serif; user-select: none; }
+  #app { display: grid; grid-template-columns: 208px 1fr; height: 100%; }
+  aside { background: var(--panel); border-right: 1px solid var(--line); padding: 16px 14px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; }
+  main { padding: 12px 20px; overflow: auto; }
+  h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
+  h2 { font-size: 11px; margin: 0 0 6px; color: var(--dim); text-transform: uppercase; letter-spacing: .8px; font-weight: 600; }
+  button, select { font: inherit; color: var(--text); background: #2a2e33; border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: #5a6068; }
+  button:focus-visible, select:focus-visible, canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  #brushes { display: grid; gap: 2px; }
+  #brushes button { display: flex; align-items: center; gap: 8px; background: none; border-color: transparent; padding: 3px 6px; text-align: left; }
+  #brushes button[aria-pressed=true] { background: #33383e; border-color: #5a6068; }
+  .swatch { width: 16px; height: 16px; border-radius: 3px; flex: none; border: 1px solid #fff3; }
+  .swatch.none { background: repeating-linear-gradient(45deg, #444 0 3px, #222 3px 6px); }
+  .row { display: flex; gap: 6px; align-items: center; }
+  .row > * { flex: 1; }
+  .seg button[aria-pressed=true] { background: #33383e; border-color: #5a6068; }
+  .small { font-size: 12px; color: var(--dim); }
+  .error { color: var(--danger); }
+  progress { width: 100%; height: 6px; accent-color: var(--accent); }
+  #stage { display: grid; grid-template-columns: repeat(2, minmax(0, min(50%, calc(100vh - 230px)))); gap: 20px; }
+  .pane { min-width: 0; }
+  .pane header { display: flex; justify-content: space-between; align-items: center; height: 32px; margin-bottom: 6px; gap: 8px; }
+  .pane h2 { margin: 0; }
+  .frame { position: relative; aspect-ratio: 1; background: #0d0e10; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  canvas { display: block; position: absolute; inset: 0; width: 100%; height: 100%; }
+  #draw { cursor: crosshair; touch-action: none; }
+  #map { image-rendering: pixelated; }
+  #overlay { pointer-events: none; }
+  #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); padding: 40px; text-align: center; }
+  #empty[hidden] { display: none; }
+  #tip { position: fixed; pointer-events: none; background: #000d; padding: 2px 7px; border-radius: 4px; font-size: 12px; display: none; white-space: nowrap; }
+  #results { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-top: 6px; }
+  #results button { padding: 3px 8px; text-align: left; }
+  #results button[aria-pressed=true] { border-color: var(--accent); background: #2b3a28; }
+  #results b { display: block; font-variant-numeric: tabular-nums; }
+  #results span { font-size: 12px; color: var(--dim); }
+  #summary { margin-top: 12px; min-height: 18px; }
+  label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <h1>Seed Carver</h1>
+    <section><h2>Brush</h2><div id="brushes"></div></section>
+    <section>
+      <h2>Tool</h2>
+      <div class="row seg" id="tools">
+        <button data-size="1" aria-pressed="false">1</button>
+        <button data-size="2" aria-pressed="true">2</button>
+        <button data-size="4" aria-pressed="false">4</button>
+        <button data-size="0" aria-pressed="false" title="Flood fill">Fill</button>
+      </div>
+      <div class="row" style="margin-top:6px"><button id="clear">Clear drawing</button></div>
+    </section>
+    <section style="margin-top:auto">
+      <h2>Seed bank</h2>
+      <div id="bankinfo" class="small"></div>
+      <progress id="progress" max="1" value="0" hidden></progress>
+      <div class="row" style="margin-top:6px">
+        <select id="target" aria-label="Bank size">
+          <option value="1000000">1M seeds</option>
+          <option value="10000000">10M seeds</option>
+          <option value="50000000">50M seeds</option>
+          <option value="100000000">100M seeds</option>
+        </select>
+        <button id="grow">Build</button>
+      </div>
+      <div id="targetinfo" class="small" style="margin-top:4px"></div>
+    </section>
+  </aside>
+  <main>
+    <div id="stage">
+      <div class="pane">
+        <header><h2>Your drawing: 4 km around 0,0, north up</h2></header>
+        <div class="frame"><canvas id="draw" width="480" height="480" tabindex="0" aria-label="Biome drawing grid"></canvas></div>
+      </div>
+      <div class="pane">
+        <header>
+          <h2 id="maptitle">Preview</h2>
+          <div class="row" style="flex:none">
+            <label class="small" style="white-space:nowrap"><input type="checkbox" id="showOverlay"> Show drawing</label>
+            <button id="copy" disabled>Copy seed</button>
+          </div>
+        </header>
+        <div class="frame">
+          <canvas id="map"></canvas>
+          <canvas id="overlay" width="480" height="480"></canvas>
+          <div id="empty">Paint biomes on the left. The best seeds appear when you lift the brush.</div>
+        </div>
+      </div>
+    </div>
+    <div id="summary" class="small" role="status"></div>
+    <div id="results"></div>
+  </main>
+</div>
+<div id="tip"></div>
+<script>
+const $ = id => document.getElementById(id);
+let api, cfg, cells, cell, brush = 0, size = 2, painting = false, current = null, currentIds = null;
+let searching = false, searchAgain = false;
+const SEED_BYTES = 256;
+
+window.addEventListener('pywebviewready', async () => {
+  api = window.pywebview.api;
+  cfg = await api.init();
+  cells = new Array(cfg.grid * cfg.grid).fill(-1);
+  cell = 480 / cfg.grid;
+  buildBrushes();
+  drawGrid();
+  describeTarget();
+  poll();
+  setInterval(poll, 1000);
+});
+
+function buildBrushes() {
+  const add = (name, color, value) => {
+    const b = document.createElement('button');
+    b.innerHTML = `<span class="swatch ${color ? '' : 'none'}" style="${color ? 'background:' + color : ''}"></span>${name}`;
+    b.setAttribute('aria-pressed', value === brush);
+    b.onclick = () => {
+      brush = value;
+      [...$('brushes').children].forEach(x => x.setAttribute('aria-pressed', x === b));
+    };
+    $('brushes').append(b);
+  };
+  cfg.groups.forEach((g, i) => add(g.name, g.color, i));
+  add('Eraser (any biome)', null, -1);
+}
+
+function fillCells(ctx, alpha) {
+  ctx.clearRect(0, 0, 480, 480);
+  ctx.globalAlpha = alpha;
+  cells.forEach((g, i) => {
+    if (g < 0) return;
+    ctx.fillStyle = cfg.groups[g].color;
+    ctx.fillRect((i % cfg.grid) * cell, Math.floor(i / cfg.grid) * cell, cell, cell);
+  });
+  ctx.globalAlpha = 1;
+}
+
+function drawGrid() {
+  const ctx = $('draw').getContext('2d');
+  fillCells(ctx, 1);
+  ctx.strokeStyle = '#ffffff14';
+  ctx.beginPath();
+  for (let i = 1; i < cfg.grid; i++) {
+    ctx.moveTo(i * cell + .5, 0); ctx.lineTo(i * cell + .5, 480);
+    ctx.moveTo(0, i * cell + .5); ctx.lineTo(480, i * cell + .5);
+  }
+  ctx.stroke();
+  crosshair(ctx);
+  drawOverlay();
+}
+
+function crosshair(ctx) {
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(232, 240); ctx.lineTo(248, 240);
+  ctx.moveTo(240, 232); ctx.lineTo(240, 248);
+  ctx.stroke();
+  ctx.lineWidth = 1;
+}
+
+function drawOverlay() {
+  const ctx = $('overlay').getContext('2d');
+  ctx.clearRect(0, 0, 480, 480);
+  if ($('showOverlay').checked) fillCells(ctx, .55);
+  if (current !== null) crosshair(ctx);
+}
+
+const cellAt = e => {
+  const r = $('draw').getBoundingClientRect();
+  return [Math.floor((e.clientX - r.left) / r.width * cfg.grid), Math.floor((e.clientY - r.top) / r.height * cfg.grid)];
+};
+
+function stamp(e) {
+  const [cx, cz] = cellAt(e), off = Math.floor((size - 1) / 2);
+  for (let z = cz - off; z < cz - off + size; z++)
+    for (let x = cx - off; x < cx - off + size; x++)
+      if (x >= 0 && z >= 0 && x < cfg.grid && z < cfg.grid) cells[z * cfg.grid + x] = brush;
+  drawGrid();
+}
+
+function flood(e) {
+  const [cx, cz] = cellAt(e), from = cells[cz * cfg.grid + cx];
+  if (from === brush) return;
+  const stack = [[cx, cz]];
+  while (stack.length) {
+    const [x, z] = stack.pop();
+    if (x < 0 || z < 0 || x >= cfg.grid || z >= cfg.grid || cells[z * cfg.grid + x] !== from) continue;
+    cells[z * cfg.grid + x] = brush;
+    stack.push([x + 1, z], [x - 1, z], [x, z + 1], [x, z - 1]);
+  }
+  drawGrid();
+}
+
+$('draw').addEventListener('pointerdown', e => {
+  $('draw').setPointerCapture(e.pointerId);
+  if (size === 0) { flood(e); runSearch(); return; }
+  painting = true;
+  stamp(e);
+});
+$('draw').addEventListener('pointermove', e => { if (painting) stamp(e); });
+$('draw').addEventListener('pointerup', () => { if (painting) { painting = false; runSearch(); } });
+
+$('tools').addEventListener('click', e => {
+  if (!e.target.dataset.size) return;
+  size = +e.target.dataset.size;
+  [...$('tools').children].forEach(x => x.setAttribute('aria-pressed', x === e.target));
+});
+$('clear').onclick = () => { cells.fill(-1); drawGrid(); runSearch(); };
+$('showOverlay').onchange = drawOverlay;
+
+// Coalesce strokes that land while a search is running into one follow-up search.
+async function runSearch() {
+  if (searching) { searchAgain = true; return; }
+  if (!cells.some(g => g >= 0)) { $('results').textContent = ''; $('summary').textContent = ''; return; }
+  searching = true;
+  try {
+    const r = await api.search(cells);
+    if (!r.hits.length) {
+      $('summary').textContent = 'The seed bank is empty. Build one in the sidebar first.';
+      $('results').textContent = '';
+    } else {
+      $('summary').textContent = `Top ${r.hits.length} of ${r.searched.toLocaleString()} seeds, searched in ${r.seconds.toFixed(2)} s`;
+      showResults(r.hits);
+    }
+  } catch (err) {
+    $('summary').innerHTML = '';
+    $('summary').append(Object.assign(document.createElement('span'), { className: 'error', textContent: err.message || String(err) }));
+  }
+  searching = false;
+  if (searchAgain) { searchAgain = false; runSearch(); }
+}
+
+function showResults(hits) {
+  $('results').textContent = '';
+  hits.forEach((h, i) => {
+    const b = document.createElement('button');
+    b.dataset.seed = h.seed;
+    b.innerHTML = `<b>${h.seed}</b><span>${(h.match * 100).toFixed(1)}% match</span>`;
+    b.onclick = () => showSeed(h.seed);
+    $('results').append(b);
+  });
+  showSeed(hits[0].seed);
+}
+
+async function showSeed(seed) {
+  current = seed;
+  [...$('results').children].forEach(x => x.setAttribute('aria-pressed', x.dataset.seed === String(seed)));
+  $('maptitle').textContent = `Seed ${seed}`;
+  $('copy').disabled = false;
+  const m = await api.preview(seed);
+  if (current !== seed) return;
+  const raw = atob(m.ids), map = $('map');
+  map.width = map.height = m.size;
+  const ctx = map.getContext('2d'), img = ctx.createImageData(m.size, m.size);
+  currentIds = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) {
+    const id = raw.charCodeAt(i), c = cfg.palette[id];
+    currentIds[i] = id;
+    img.data.set([c[0], c[1], c[2], 255], i * 4);
+  }
+  ctx.putImageData(img, 0, 0);
+  $('empty').hidden = true;
+  drawOverlay();
+}
+
+$('copy').onclick = () => {
+  const t = Object.assign(document.createElement('textarea'), { value: String(current) });
+  document.body.append(t);
+  t.select();
+  document.execCommand('copy');
+  t.remove();
+  $('copy').textContent = 'Copied';
+  setTimeout(() => $('copy').textContent = 'Copy seed', 1200);
+};
+
+$('map').addEventListener('mousemove', e => {
+  if (!currentIds) return;
+  const r = $('map').getBoundingClientRect(), n = $('map').width;
+  const px = Math.floor((e.clientX - r.left) / r.width * n), pz = Math.floor((e.clientY - r.top) / r.height * n);
+  const blocks = cfg.area / n;
+  const tip = $('tip');
+  tip.textContent = `${cfg.names[currentIds[pz * n + px]].replaceAll('_', ' ')}  (${px * blocks - cfg.area / 2}, ${pz * blocks - cfg.area / 2})`;
+  tip.style.display = 'block';
+  tip.style.left = e.clientX + 14 + 'px';
+  tip.style.top = e.clientY + 14 + 'px';
+});
+$('map').addEventListener('mouseleave', () => $('tip').style.display = 'none');
+
+function describeTarget() {
+  const n = +$('target').value;
+  $('targetinfo').textContent = `${(n * SEED_BYTES / 1e9).toFixed(n < 1e7 ? 2 : 1)} GB on disk`;
+}
+$('target').onchange = describeTarget;
+
+let buildingLast = false;
+async function poll() {
+  const s = await api.status();
+  const b = s.build;
+  let info = `${s.seeds.toLocaleString()} seeds`;
+  if (b) {
+    const eta = b.rate ? (b.target - b.done) / b.rate : 0;
+    info = `Building: ${b.done.toLocaleString()} / ${b.target.toLocaleString()}` + (eta ? `, ${formatTime(eta)} left` : '');
+    $('progress').value = b.done / b.target;
+  } else if (!s.seeds) {
+    info = 'No seed bank yet. Build one to start.';
+  }
+  $('bankinfo').textContent = info;
+  $('bankinfo').className = s.error ? 'small error' : 'small';
+  if (s.error) $('bankinfo').textContent = s.error;
+  $('progress').hidden = !b;
+  $('grow').textContent = b ? 'Stop' : 'Build';
+  $('target').disabled = !!b;
+  if (buildingLast && !b && cells.some(g => g >= 0)) runSearch();
+  buildingLast = !!b;
+}
+$('grow').onclick = () => $('grow').textContent === 'Stop' ? api.stop_build() : api.start_build(+$('target').value).then(poll);
+</script>
+</body>
+</html>
