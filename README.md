@@ -75,6 +75,9 @@ Closely, but rarely exactly. On a 1M bank, top results for a painted line had a 
 **Where does the app look for the bank?**
 Only for a file named exactly `seeds.bank`, directly beside the exe. Subfolders and other names are ignored.
 
+**What is `seeds.bank.idx`?**
+A search index built from the bank: for each seed, which biome groups appear in each 4×4-cell tile (512 bytes per seed, an eighth of the bank). A search first scores every seed's best possible match from the index, then reads and scores exactly only the seeds that could still make the top 10, so most of the bank is never read. Results are identical to a full scan. It is created and kept up to date automatically, and rebuilt if the biome groups change. Deleting it is safe.
+
 **Are new seeds searchable while the bank grows?**
 Yes. Every search re-reads the bank size, so it includes all seeds written so far. Results refresh on your next brush stroke and when a build ends.
 

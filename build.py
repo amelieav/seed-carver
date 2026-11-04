@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 VENDOR = ROOT / "vendor" / "cubiomes"
 EXT = {"win32": "dll", "darwin": "dylib"}.get(sys.platform, "so")
-LIB = ROOT / "seedcarver" / f"core.{EXT}"
+LIB = ROOT / "seedcarver" / f"libcore.{EXT}"
 SOURCES = ["biomenoise", "biomes", "noise", "util", "generator", "layers"]
 
 

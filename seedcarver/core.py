@@ -6,14 +6,19 @@ from pathlib import Path
 GRID = 64
 CELLS = GRID * GRID
 AREA = GRID * 16  # blocks per side of the bank's sampled square; one cell per chunk
+TILE = 4
+TILES = (GRID // TILE) ** 2
 
 _ext = {"win32": "dll", "darwin": "dylib"}.get(sys.platform, "so")
-_lib = C.CDLL(str(Path(__file__).with_name(f"core.{_ext}")))
+_lib = C.CDLL(str(Path(__file__).with_name(f"libcore.{_ext}")))
 _lib.sc_gen_block.argtypes = [C.c_uint64, C.c_int, C.c_void_p]
 _lib.sc_gen_block.restype = None
 _lib.sc_map.argtypes = [C.c_uint64, C.c_int, C.c_int, C.c_int, C.c_int, C.c_int, C.c_void_p]
 _lib.sc_map.restype = None
 _lib.sc_scan.argtypes = [C.c_void_p, C.c_int, C.c_char_p, C.c_void_p, C.c_void_p, C.c_void_p, C.c_int, C.c_uint32, C.c_void_p, C.c_int, C.c_void_p, C.c_void_p]
+_lib.sc_tiles.argtypes = [C.c_void_p, C.c_int, C.c_void_p, C.c_void_p]
+_lib.sc_tiles.restype = None
+_lib.sc_bound.argtypes = [C.c_void_p, C.c_int] + [C.c_void_p] * 6 + [C.c_int, C.c_uint32, C.c_uint32, C.c_void_p]
 _lib.sc_palette.argtypes = [C.c_void_p]
 _lib.sc_palette.restype = None
 _lib.sc_biome_name.argtypes = [C.c_int]
@@ -47,6 +52,26 @@ def scan(buf, count, cost, cells, groups, weights, need, id_mask, k):
     mask_ptr = (C.c_uint32 * len(id_mask)).from_buffer(id_mask)
     n = _lib.sc_scan(_ptr(buf), count, cost, cell_ptr, group_ptr, weight_ptr, len(cells), need, mask_ptr, k, index, score)
     return [(score[i], index[i]) for i in range(n)]
+
+
+def tiles(buf, count, class_bit, out):
+    """Fill out (bytearray of count*TILES*2) with each record's per-tile OR of class_bit (array('H') of 256)."""
+    _lib.sc_tiles(_ptr(buf), count, (C.c_uint16 * 256).from_buffer(class_bit), _ptr(out))
+
+
+class Bound:
+    """Per-tile lower bound of a drawing's score. entries: [(tile, hit mask, near mask, w_hit, w_near, w_miss)]."""
+
+    def __init__(self, entries, need):
+        cols = list(zip(*entries))
+        self.n, self.need = len(entries), need
+        self.args = [(C.c_uint16 * self.n)(*cols[i]) for i in range(3)] + [(C.c_uint32 * self.n)(*cols[i]) for i in range(3, 6)]
+
+    def __call__(self, buf, count, limit):
+        """Records of a block of tile masks with bound <= limit, as [(bound, index)] sorted by bound."""
+        keys = (C.c_uint64 * count)()
+        n = _lib.sc_bound(_ptr(buf), count, *self.args, self.n, self.need, limit, keys)
+        return [(keys[i] >> 32, keys[i] & 0xFFFFFFFF) for i in range(n)]
 
 
 def palette():

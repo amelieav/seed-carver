@@ -1,5 +1,6 @@
 // Thin single-threaded core over cubiomes. Python drives threads; ctypes releases the GIL.
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include "biomenoise.h"
 #include "biomes.h"
@@ -73,6 +74,53 @@ API int sc_scan(const uint8_t *data, int count, const uint8_t *cost, const uint1
         score[p] = s;
         idx[p] = i;
     }
+    return found;
+}
+
+#define TILE 4
+#define TILES ((GRID / TILE) * (GRID / TILE))
+
+// Per record, one class mask per 4x4 tile: the OR of class_bit over the tile's cells.
+API void sc_tiles(const uint8_t *data, int count, const uint16_t *class_bit, uint16_t *out)
+{
+    for (int i = 0; i < count; i++, data += CELLS, out += TILES) {
+        memset(out, 0, TILES * sizeof *out);
+        for (int c = 0; c < CELLS; c++)
+            out[(c / GRID / TILE) * (GRID / TILE) + (c % GRID) / TILE] |= class_bit[data[c]];
+    }
+}
+
+static int cmp_u64(const void *a, const void *b)
+{
+    uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b;
+    return (x > y) - (x < y);
+}
+
+// Lower bound of each record's score from its tile masks. Each of the n entries is one painted group in one tile:
+// it costs w_hit if the tile holds a hit class, else w_near if it holds a near class, else w_miss.
+// Writes records whose bound <= limit and that hold every class of need as keys bound << 32 | index, sorted.
+API int sc_bound(const uint16_t *tiles, int count, const uint16_t *tile, const uint16_t *hit, const uint16_t *near,
+                 const uint32_t *w_hit, const uint32_t *w_near, const uint32_t *w_miss, int n, uint32_t need,
+                 uint32_t limit, uint64_t *keys)
+{
+    int found = 0;
+    for (int i = 0; i < count; i++, tiles += TILES) {
+        if (need) {
+            uint32_t seen = 0;
+            for (int t = 0; t < TILES; t++)
+                seen |= tiles[t];
+            if ((seen & need) != need)
+                continue;
+        }
+        uint32_t s = 0;
+        for (int j = 0; j < n && s <= limit; j++) {
+            uint16_t m = tiles[tile[j]];
+            s += m & hit[j] ? w_hit[j] : m & near[j] ? w_near[j] : w_miss[j];
+        }
+        if (s <= limit)
+            keys[found++] = (uint64_t)s << 32 | (uint32_t)i;
+    }
+    qsort(keys, found, sizeof *keys, cmp_u64);
     return found;
 }
 
